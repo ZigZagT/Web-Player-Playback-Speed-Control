@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         Plex Playback Speed
 // @namespace    https://github.com/ZigZagT
-// @version      1.2.5
+// @version      1.2.6
 // @downloadURL  https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
 // @updateURL    https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
 // @description  Add playback speed controls to plex web player with keyboard shortcuts
 // @author       ZigZagT
 // @include      /^https?://[^/]*plex[^/]*/
 // @include      /^https?://[^/]*:32400/
+// @match        https://app.plex.tv/
+// @match        https://plex.tv/
 // @license MIT
 // ==/UserScript==
 
