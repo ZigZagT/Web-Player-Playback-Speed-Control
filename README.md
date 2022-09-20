@@ -19,11 +19,18 @@
 ## Usage
 
 1. Use the turtle and rabbit icons in the control strip to slowdown / speedup
+
 <img width="398" alt="Screen Shot 2022-09-19 at 9 24 10 PM" src="https://user-images.githubusercontent.com/7879714/191167267-9430ec1f-2815-49cf-8904-b5aa73809ef9.png">
 
 2. Use `<` or `>` keys on the keyboard to decrease / increase speeds.
 
 3. Use number keys (1-9) to quickly choose from a preset speeds.
 
+## Troubleshoot
 
+### The web player is laggy, sometime stuck
+
+Try disable the `Direct Play` option and leave `Direct Stream` enabled in the `Plex Web - Debug` settings.
+
+<img width="228" alt="image" src="https://user-images.githubusercontent.com/7879714/191168287-d1b7a12a-6aa2-4d49-afba-8cf32271f670.png">
 
