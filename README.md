@@ -1,4 +1,4 @@
-# Plex Web Player Speed Control Widgets and Keyboard Shortcuts
+# Plex Web Player Playback Speed Control and Keyboard Shortcuts
 
 ## Install with Desktop Chrome
 1. Install [Tampermonkey][2] or any equivalent for your browser;
