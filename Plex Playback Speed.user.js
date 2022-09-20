@@ -1,5 +1,6 @@
 // ==UserScript==
 // @name         Plex Playback Speed
+// @namespace    https://github.com/ZigZagT
 // @version      1.2.5
 // @downloadURL  https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
 // @updateURL    https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
@@ -7,7 +8,7 @@
 // @author       ZigZagT
 // @include      /^https?://[^/]*plex[^/]*/
 // @include      /^https?://[^/]*:32400/
-// @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
+// @license MIT
 // ==/UserScript==
 
 (function() {
