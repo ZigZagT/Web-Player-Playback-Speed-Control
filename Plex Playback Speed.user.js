@@ -1,15 +1,20 @@
 // ==UserScript==
-// @name         Plex Playback Speed Controls
-// @version      1.0
-// @description  Plex Web Player Speed Control Widgets and Keyboard Shortcuts
+// @name         Plex Playback Speed
+// @version      1.2.0
+// @updateURL    https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/bfaa6288230d939a30538998afd06f3ec360e7be/Plex%2520Playback%2520Speed.user.js
+// @description  Add playback speed controls to plex web player with keyboard shortcuts
 // @author       ZigZagT
-// @match        https://app.plex.tv/*
+// @include      /^https?://[^/]*plex[^/]*
+// @include      /^https?://[^/]*:32400
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
 // @grant        none
 // ==/UserScript==
 
 (function() {
     'use strict';
+    const console_log = (...args) => {
+        console.log(`PlexPlaybackSpeed:`, ...args)
+    }
     const cycleSpeeds = [
         0.5, 0.8, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 3, 5, 4, 5, 6, 7, 8, 9, 10, 15, 20
     ];
@@ -57,13 +62,13 @@
     function getNextCycleSpeed(direction, currentSpeed) {
         let newSpeed = currentSpeed;
         for (const speed of cycleSpeeds) {
-            if (direction === 'left') {
+            if (direction === 'slowdown') {
                 if (speed < currentSpeed) {
                     newSpeed = speed;
                 } else {
                     break;
                 }
-            } else if (direction === 'right') {
+            } else if (direction === 'speedup') {
                 if (speed > currentSpeed) {
                     newSpeed = speed;
                     break;
@@ -77,48 +82,44 @@
     }
 
     function keyboardUpdateSpeed(e) {
-        const currentSpeed = document.querySelector("video").playbackRate;
+        const videoElem = document.querySelector("video");
+        if (videoElem == null) {
+            return;
+        }
+        const currentSpeed = videoElem.playbackRate;
         let newSpeed = currentSpeed;
-        console.log({currentSpeed, key: e.key});
+        console_log({currentSpeed, key: e.key});
         if (e.key in quickSetSpeeds) {
             newSpeed = quickSetSpeeds[e.key];
         } else if (["<", ","].includes(e.key)) {
-            newSpeed = getNextCycleSpeed('left', currentSpeed);
+            newSpeed = getNextCycleSpeed('slowdown', currentSpeed);
         } else if ([">", "."].includes(e.key)) {
-            newSpeed = getNextCycleSpeed('right', currentSpeed);
+            newSpeed = getNextCycleSpeed('speedup', currentSpeed);
         } else {
             return;
         }
-        console.log({newSpeed});
-        document.querySelector("video").playbackRate = newSpeed;
+        console_log('change speed to', newSpeed);
+        videoElem.playbackRate = newSpeed;
         prompt(`Speed: ${newSpeed}x`);
     }
 
     function btnSpeedUpFn() {
         const currentSpeed = document.querySelector("video").playbackRate;
-        let newSpeed = getNextCycleSpeed('right', currentSpeed);
-        console.log({newSpeed});
+        let newSpeed = getNextCycleSpeed('speedup', currentSpeed);
+        console_log('change speed to', newSpeed);
         document.querySelector("video").playbackRate = newSpeed;
         prompt(`Speed: ${newSpeed}x`);
     };
 
     function btnSlowdownFn() {
         const currentSpeed = document.querySelector("video").playbackRate;
-        let newSpeed = getNextCycleSpeed('left', currentSpeed);
-        console.log({newSpeed});
+        let newSpeed = getNextCycleSpeed('slowdown', currentSpeed);
+        console_log('change speed to', newSpeed);
         document.querySelector("video").playbackRate = newSpeed;
         prompt(`Speed: ${newSpeed}x`);
 };
 
     function addPlaybackButtonControls() {
-        const container = document.querySelector('[class*="PlayerControls-buttonGroupRight"]');
-        if (container == null) {
-            return;
-        }
-        if (container.querySelector('#playback-speed-btn-slowdown')) {
-            return;
-        }
-
         const btnStyle = `
             align-items: center;
             border-radius: 15px;
@@ -131,19 +132,28 @@
             width: 30px;
         `;
 
-        const btnSlowDown = document.createElement('button');
-        btnSlowDown.id = 'playback-speed-btn-slowdown';
-        btnSlowDown.style = btnStyle;
-        btnSlowDown.innerHTML = '🐢';
-        btnSlowDown.addEventListener('click', btnSlowdownFn);
+        const containers = document.querySelectorAll('[class*="PlayerControls-buttonGroupRight"]');
+        containers.forEach(container => {
+            if (container.querySelector('#playback-speed-btn-slowdown')) {
+                return;
+            }
 
-        const btnSpeedUp = document.createElement('button');
-        btnSpeedUp.id = 'playback-speed-btn-speedup';
-        btnSpeedUp.style = btnStyle;
-        btnSpeedUp.innerHTML = '🐇';
-        btnSpeedUp.addEventListener('click', btnSpeedUpFn);
+            const btnSlowDown = document.createElement('button');
+            btnSlowDown.id = 'playback-speed-btn-slowdown';
+            btnSlowDown.style = btnStyle;
+            btnSlowDown.innerHTML = '🐢';
+            btnSlowDown.addEventListener('click', btnSlowdownFn);
 
-        container.prepend(btnSlowDown, btnSpeedUp);
+            const btnSpeedUp = document.createElement('button');
+            btnSpeedUp.id = 'playback-speed-btn-speedup';
+            btnSpeedUp.style = btnStyle;
+            btnSpeedUp.innerHTML = '🐇';
+            btnSpeedUp.addEventListener('click', btnSpeedUpFn);
+
+            console_log('adding speed controls to', container);
+            container.prepend(btnSlowDown, btnSpeedUp);
+        })
+
     }
 
     function scheduleLoopFrame() {
@@ -155,7 +165,7 @@
         }, 500);
     };
 
-    console.log('setup playback speed controls');
+    console_log('registering playback speed controls');
     window.addEventListener("keydown", keyboardUpdateSpeed);
     scheduleLoopFrame();
 })();
