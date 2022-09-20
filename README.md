@@ -15,3 +15,15 @@
 [1]: https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
 [2]: https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=en
 [3]: https://itunes.apple.com/us/app/userscripts/id1463298887
+
+## Usage
+
+1. Use the turtle and rabbit icons in the control strip to slowdown / speedup
+<img width="398" alt="Screen Shot 2022-09-19 at 9 24 10 PM" src="https://user-images.githubusercontent.com/7879714/191167267-9430ec1f-2815-49cf-8904-b5aa73809ef9.png">
+
+2. Use `<` or `>` keys on the keyboard to decrease / increase speeds.
+
+3. Use number keys (1-9) to quickly choose from a preset speeds.
+
+
+
