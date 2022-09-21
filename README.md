@@ -1,5 +1,9 @@
 # Plex Web Player Playback Speed Control and Keyboard Shortcuts
 
+[Github][4]
+
+[Greasy Fork][5]
+
 ## Install with Desktop Chrome
 1. Install [Tampermonkey][2] or any equivalent for your browser;
 2. Open [this link][1] in Chrome, and the Tampermonkey plugin should automatically prompt for installation.
@@ -15,6 +19,8 @@
 [1]: https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
 [2]: https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=en
 [3]: https://itunes.apple.com/us/app/userscripts/id1463298887
+[4]: https://gist.github.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c
+[5]: https://greasyfork.org/en/scripts/451667-plex-playback-speed
 
 ## Usage
 
