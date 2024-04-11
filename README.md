@@ -4,23 +4,58 @@
 
 [Greasy Fork][5]
 
-## Install with Desktop Chrome
-1. Install [Tampermonkey][2] or any equivalent for your browser;
-2. Open [this link][1] in Chrome, and the Tampermonkey plugin should automatically prompt for installation.
-3. Once installed, future script updates can be done via the Tampermonkey check for updates function
+## Install in Plex Server (Manual)
+1. Locate the WebClient directory in your Plex Server installation. This path varies depends on the server configuration. Taking the [plex server docker image provided by linuxserver.io][6] as example, in image `linuxserver/plex:1.40.0` the WebClient bundle is located at `usr/lib/plexmediaserver/Resources/Plug-ins-c29d4c0c8/WebClient.bundle/Contents/Resources`
+2. Save the `Plex Playback Speed.user.js` file into the `js` folder.
+3. Rename the downloaded file, remove `.user` part from the file extension. Other the user script extensions in users browser may mistakenly hijack the script request.
+4. Edit `index.html` file, add a script tag that points to the downloaded script file. Assuming the file is stored at `js/PlexPlaybackSpeed.js`, the script tag should be `<script src="/web/js/PlexPlaybackSpeed.js"></script>`
+
+The script will not update automatically with this installation.
+
+## Install in Plex Server (Automated with `linuxserver/plex` docker deployment)
+If the Plex Server is deployed with `linuxserver/plex` docker image, install and update may be automated as follows:
+1. Create a script on the docker host:
+```bash
+# inject_Plex_Playback_Speed_controls.sh
+cd /usr/lib/plexmediaserver/Resources/Plug-ins-*/WebClient.bundle/Contents/Resources
+wget -O "js/PlexPlaybackSpeed.js" "https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js"
+sed -i 's#</head>#<script src="/web/js/PlexPlaybackSpeed.js"></script></head>#' index.html
+```
+2. Add execution permission to `inject_Plex_Playback_Speed_controls.sh`.
+2. Mount the `inject_Plex_Playback_Speed_controls.sh` script into container as start up script:
+```yaml
+# docker-compose.yaml
+services:
+  plex:
+    image: linuxserver/plex
+    tmpfs:
+      - /tmp
+    volumes:
+      # ... other volumes ...
+      - /path/to/inject_Plex_Playback_Speed_controls.sh:/etc/cont-init.d/99-inject_Plex_Playback_Speed_controls.sh
+    devices:
+      - /dev/dri:/dev/dri
+    restart: always
+```
+
+## Install in Desktop Chrome / Firefox
+1. Install [Tampermonkey][2] or any equivalent user script extension in your browser;
+2. Open [this link][1] in your browser. The user script extension should automatically prompt for installation.
+3. Future script updates may be checked and installed automatically by user script extension.
 
 
-## Install Safari (applies to both macOS Desktop and iOS/iPadOS Safari)
+## Install in Safari (macOS Desktop or iOS/iPadOS Safari)
 1. Install the [Userscripts][3] Safari extension from App Store.
 2. Enable the extension following its instruction. Make sure you have the `Save Location` setting configured.
 3. Open [this link][1] in Safari, and save the file to the `Save Location` of your choice.
-4. Once installed, future script updates can be done via the Userscripts check for updates function.
+4. Future script updates may be checked and installed automatically by the Userscripts app.
 
 [1]: https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
 [2]: https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=en
 [3]: https://itunes.apple.com/us/app/userscripts/id1463298887
 [4]: https://gist.github.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c
 [5]: https://greasyfork.org/en/scripts/451667-plex-playback-speed
+[6]: https://docs.linuxserver.io/images/docker-plex/
 
 ## Usage
 
@@ -30,11 +65,11 @@
 
 2. Use `<` or `>` keys on the keyboard to decrease / increase speeds.
 
-3. Use number keys (1-9) to quickly choose from a preset speeds.
+3. Use number keys (1-9) to quickly set a preset speeds.
 
 ## Troubleshoot
 
-### The web player is laggy, sometime stuck
+### Web player is laggy, sometime stuck
 
 Try disable the `Direct Play` option and leave `Direct Stream` enabled in the `Plex Web - Debug` settings.
 
