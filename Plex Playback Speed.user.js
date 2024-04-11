@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Plex Playback Speed
 // @namespace    https://github.com/ZigZagT
-// @version      1.3.0
+// @version      1.3.1
 // @downloadURL  https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
 // @updateURL    https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
 // @description  Add playback speed controls to plex web player with keyboard shortcuts
@@ -169,9 +169,9 @@
     }
 
     if (window.__plex_playback_speed_control_registered__) {
-        window.__plex_playback_speed_control_registered__ = true;
         console_log('plex playback speed controls are already registered');
     } else {
+        window.__plex_playback_speed_control_registered__ = true;
         console_log('registering plex playback speed controls');
         window.addEventListener("keydown", keyboardUpdateSpeed);
         scheduleLoopFrame();
