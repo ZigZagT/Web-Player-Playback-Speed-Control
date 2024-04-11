@@ -5,15 +5,15 @@
 [Greasy Fork][5]
 
 ## Install in Plex Server (Manual)
-1. Locate the WebClient directory in your Plex Server installation. This path varies depends on the server configuration. Taking the [plex server docker image provided by linuxserver.io][6] as example, in image `linuxserver/plex:1.40.0` the WebClient bundle is located at `usr/lib/plexmediaserver/Resources/Plug-ins-c29d4c0c8/WebClient.bundle/Contents/Resources`
+1. Locate the WebClient directory in your Plex Server installation. This path varies depends on the server setup. Taking the [plex server docker image provided by linuxserver.io][6] as example, with image `linuxserver/plex:1.40.0` the WebClient bundle is located at `/usr/lib/plexmediaserver/Resources/Plug-ins-c29d4c0c8/WebClient.bundle/Contents/Resources`.
 2. Save the `Plex Playback Speed.user.js` file into the `js` folder.
-3. Rename the downloaded file, remove `.user` part from the file extension. Other the user script extensions in users browser may mistakenly hijack the script request.
-4. Edit `index.html` file, add a script tag that points to the downloaded script file. Assuming the file is stored at `js/PlexPlaybackSpeed.js`, the script tag should be `<script src="/web/js/PlexPlaybackSpeed.js"></script>`
+3. Rename the downloaded file, remove `.user` part from the file extension. Otherwise user script extensions in users browser may mistakenly hijack the script request.
+4. Edit `index.html` file, add a script tag that points to the downloaded script file. The path shuold be prefixed with `/web`. For example, if script file is stored at `js/PlexPlaybackSpeed.js`, the `<script>` tag should be `<script src="/web/js/PlexPlaybackSpeed.js"></script>`
 
 The script will not update automatically with this installation.
 
-## Install in Plex Server (Automated with `linuxserver/plex` docker deployment)
-If the Plex Server is deployed with `linuxserver/plex` docker image, install and update may be automated as follows:
+## Automated Install and Update in Plex Server (with `linuxserver/plex` docker deployment)
+Install and update may be automated as follows:
 1. Create a script on the docker host:
 ```bash
 # inject_Plex_Playback_Speed_controls.sh
@@ -22,7 +22,7 @@ wget -O "js/PlexPlaybackSpeed.js" "https://gist.githubusercontent.com/ZigZagT/b9
 sed -i 's#</head>#<script src="/web/js/PlexPlaybackSpeed.js"></script></head>#' index.html
 ```
 2. Add execution permission to `inject_Plex_Playback_Speed_controls.sh`.
-3. Mount the `inject_Plex_Playback_Speed_controls.sh` script into container as start up script:
+3. Mount `inject_Plex_Playback_Speed_controls.sh` script into container as start up script:
 ```yaml
 # docker-compose.yaml
 services:
