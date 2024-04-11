@@ -4,14 +4,6 @@
 
 [Greasy Fork][5]
 
-## Install in Plex Server (Manual)
-1. Locate the WebClient directory in your Plex Server installation. This path varies depends on the server setup. Taking the [plex server docker image provided by linuxserver.io][6] as example, with image `linuxserver/plex:1.40.0` the WebClient bundle is located at `/usr/lib/plexmediaserver/Resources/Plug-ins-c29d4c0c8/WebClient.bundle/Contents/Resources`.
-2. Save the `Plex Playback Speed.user.js` file into the `js` folder.
-3. Rename the downloaded file, remove `.user` part from the file extension. Otherwise user script extensions in users browser may mistakenly hijack the script request.
-4. Edit `index.html` file, add a script tag that points to the downloaded script file. The path shuold be prefixed with `/web`. For example, if script file is stored at `js/PlexPlaybackSpeed.js`, the `<script>` tag should be `<script src="/web/js/PlexPlaybackSpeed.js"></script>`
-
-The script will not update automatically with this installation.
-
 ## Automated Install and Update in Plex Server (with `linuxserver/plex` docker deployment)
 Install and update may be automated as follows:
 1. Create a script on the docker host:
@@ -39,6 +31,15 @@ services:
 ```
 
 The latest script will be installed whenever the container restarts.
+
+
+## Manual Install in Plex Server
+1. Locate the WebClient directory in your Plex Server installation. This path varies depends on the server setup. Taking the [plex server docker image provided by linuxserver.io][6] as example, with image `linuxserver/plex:1.40.0` the WebClient bundle is located at `/usr/lib/plexmediaserver/Resources/Plug-ins-c29d4c0c8/WebClient.bundle/Contents/Resources`.
+2. Save the `Plex Playback Speed.user.js` file into the `js` folder.
+3. Rename the downloaded file, remove `.user` part from the file extension. Otherwise user script extensions in users browser may mistakenly hijack the script request.
+4. Edit `index.html` file, add a script tag that points to the downloaded script file. The path shuold be prefixed with `/web`. For example, if script file is stored at `js/PlexPlaybackSpeed.js`, the `<script>` tag should be `<script src="/web/js/PlexPlaybackSpeed.js"></script>`
+
+The script will not update automatically with this installation.
 
 ## Install in Desktop Chrome / Firefox
 1. Install [Tampermonkey][2] or any equivalent user script extension in your browser;
