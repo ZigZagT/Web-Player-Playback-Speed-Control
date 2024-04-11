@@ -166,7 +166,7 @@
                 scheduleLoopFrame();
             });
         }, 500);
-    };
+    }
 
     if (window.__plex_playback_speed_control_registered__) {
         window.__plex_playback_speed_control_registered__ = true;
