@@ -52,13 +52,6 @@ The latest script will be installed whenever the container restarts.
 3. Open [this link][1] in Safari, and save the file to the `Save Location` of your choice.
 4. Future script updates may be checked and installed automatically by the Userscripts app.
 
-[1]: https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
-[2]: https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=en
-[3]: https://itunes.apple.com/us/app/userscripts/id1463298887
-[4]: https://gist.github.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c
-[5]: https://greasyfork.org/en/scripts/451667-plex-playback-speed
-[6]: https://docs.linuxserver.io/images/docker-plex/
-
 ## Usage
 
 1. Use the turtle and rabbit icons in the control strip to slowdown / speedup
@@ -77,3 +70,9 @@ Try disable the `Direct Play` option and leave `Direct Stream` enabled in the `P
 
 <img width="228" alt="image" src="https://user-images.githubusercontent.com/7879714/191168287-d1b7a12a-6aa2-4d49-afba-8cf32271f670.png">
 
+[1]: https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
+[2]: https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=en
+[3]: https://itunes.apple.com/us/app/userscripts/id1463298887
+[4]: https://gist.github.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c
+[5]: https://greasyfork.org/en/scripts/451667-plex-playback-speed
+[6]: https://docs.linuxserver.io/images/docker-plex
