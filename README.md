@@ -22,7 +22,7 @@ wget -O "js/PlexPlaybackSpeed.js" "https://gist.githubusercontent.com/ZigZagT/b9
 sed -i 's#</head>#<script src="/web/js/PlexPlaybackSpeed.js"></script></head>#' index.html
 ```
 2. Add execution permission to `inject_Plex_Playback_Speed_controls.sh`.
-2. Mount the `inject_Plex_Playback_Speed_controls.sh` script into container as start up script:
+3. Mount the `inject_Plex_Playback_Speed_controls.sh` script into container as start up script:
 ```yaml
 # docker-compose.yaml
 services:
@@ -37,6 +37,8 @@ services:
       - /dev/dri:/dev/dri
     restart: always
 ```
+
+The latest script will be installed whenever the container restarts.
 
 ## Install in Desktop Chrome / Firefox
 1. Install [Tampermonkey][2] or any equivalent user script extension in your browser;
