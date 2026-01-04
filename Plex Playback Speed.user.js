@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Plex Playback Speed
 // @namespace    https://github.com/ZigZagT
-// @version      1.3.1
+// @version      1.4.0
 // @downloadURL  https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
 // @updateURL    https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
 // @description  Add playback speed controls to plex web player with keyboard shortcuts
@@ -32,6 +32,7 @@
         8: 8,
         9: 10,
     };
+    let currentSpeed = 1;
 
     function prompt(txt) {
         const existingPrompt = document.querySelector("#playback-speed-prompt");
@@ -62,6 +63,21 @@
         }, 2000);
     }
 
+    function setVideoSpeed(speed) {
+        currentSpeed = speed;
+    }
+
+    function syncVideoSpeed() {
+        const videoElem = document.querySelector("video");
+        if (videoElem == null) {
+            return;
+        }
+        if (videoElem.playbackRate != currentSpeed) {
+            console_log(`setting playbackRate to ${currentSpeed} for`, videoElem);
+            videoElem.playbackRate = currentSpeed;
+        }
+    }
+
     function getNextCycleSpeed(direction, currentSpeed) {
         let newSpeed = currentSpeed;
         for (const speed of cycleSpeeds) {
@@ -85,11 +101,6 @@
     }
 
     function keyboardUpdateSpeed(e) {
-        const videoElem = document.querySelector("video");
-        if (videoElem == null) {
-            return;
-        }
-        const currentSpeed = videoElem.playbackRate;
         let newSpeed = currentSpeed;
         console_log({currentSpeed, key: e.key});
         if (e.key in quickSetSpeeds) {
@@ -102,23 +113,21 @@
             return;
         }
         console_log('change speed to', newSpeed);
-        videoElem.playbackRate = newSpeed;
+        setVideoSpeed(newSpeed);
         prompt(`Speed: ${newSpeed}x`);
     }
 
     function btnSpeedUpFn() {
-        const currentSpeed = document.querySelector("video").playbackRate;
         let newSpeed = getNextCycleSpeed('speedup', currentSpeed);
         console_log('change speed to', newSpeed);
-        document.querySelector("video").playbackRate = newSpeed;
+        setVideoSpeed(newSpeed);
         prompt(`Speed: ${newSpeed}x`);
     }
 
     function btnSlowdownFn() {
-        const currentSpeed = document.querySelector("video").playbackRate;
         let newSpeed = getNextCycleSpeed('slowdown', currentSpeed);
         console_log('change speed to', newSpeed);
-        document.querySelector("video").playbackRate = newSpeed;
+        setVideoSpeed(newSpeed);
         prompt(`Speed: ${newSpeed}x`);
     }
 
@@ -162,6 +171,7 @@
     function scheduleLoopFrame() {
         setTimeout(() => {
             requestAnimationFrame(() => {
+                syncVideoSpeed();
                 addPlaybackButtonControls();
                 scheduleLoopFrame();
             });
