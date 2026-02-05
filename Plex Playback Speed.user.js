@@ -1,23 +1,22 @@
 // ==UserScript==
 // @name         Plex Playback Speed
 // @namespace    https://github.com/ZigZagT
-// @version      1.4.0
+// @version      1.5.0
 // @downloadURL  https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
 // @updateURL    https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
 // @description  Add playback speed controls to plex web player with keyboard shortcuts
 // @author       ZigZagT
 // @include      /^https?://[^/]*plex[^/]*/
 // @include      /^https?://[^/]*:32400/
-// @match        https://app.plex.tv/
-// @match        https://plex.tv/
+// @include      *://app.plex.tv/**
+// @include      *://plex.tv/**
+// @run-at       document-start
 // @license MIT
 // ==/UserScript==
 
 (function() {
     'use strict';
-    const console_log = (...args) => {
-        console.log(`PlexPlaybackSpeed:`, ...args)
-    }
+    const console_log = (...args) => console.log('PlexPlaybackSpeed:', ...args);
     const cycleSpeeds = [
         0.5, 0.8, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 3, 5, 4, 5, 6, 7, 8, 9, 10, 15, 20
     ];
@@ -101,20 +100,33 @@
     }
 
     function keyboardUpdateSpeed(e) {
+        // Ignore if user is typing in an input field
+        const target = e.target;
+        if (target.matches('input, textarea, [contenteditable]')) {
+            return;
+        }
+
         let newSpeed = currentSpeed;
+        let isEventHandled = false;
         console_log({currentSpeed, key: e.key});
         if (e.key in quickSetSpeeds) {
             newSpeed = quickSetSpeeds[e.key];
+            isEventHandled = true;
         } else if (["<", ","].includes(e.key)) {
             newSpeed = getNextCycleSpeed('slowdown', currentSpeed);
+            isEventHandled = true;
         } else if ([">", "."].includes(e.key)) {
             newSpeed = getNextCycleSpeed('speedup', currentSpeed);
-        } else {
-            return;
+            isEventHandled = true;
         }
-        console_log('change speed to', newSpeed);
-        setVideoSpeed(newSpeed);
-        prompt(`Speed: ${newSpeed}x`);
+
+        if (isEventHandled) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            console_log('change speed to', newSpeed);
+            setVideoSpeed(newSpeed);
+            prompt(`Speed: ${newSpeed}x`);
+        }
     }
 
     function btnSpeedUpFn() {
@@ -183,7 +195,9 @@
     } else {
         window.__plex_playback_speed_control_registered__ = true;
         console_log('registering plex playback speed controls');
-        window.addEventListener("keydown", keyboardUpdateSpeed);
+        // Use capture phase so our handler intercepts the events before other handlers
+        // https://www.quirksmode.org/js/events_order.html#link4
+        window.addEventListener("keydown", keyboardUpdateSpeed, true);
         scheduleLoopFrame();
     }
 })();
