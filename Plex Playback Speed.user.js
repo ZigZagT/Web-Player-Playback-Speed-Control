@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Plex Playback Speed
 // @namespace    https://github.com/ZigZagT
-// @version      1.5.0
+// @version      1.6.0
 // @downloadURL  https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
 // @updateURL    https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js
 // @description  Add playback speed controls to plex web player with keyboard shortcuts
@@ -10,13 +10,52 @@
 // @include      /^https?://[^/]*:32400/
 // @include      *://app.plex.tv/**
 // @include      *://plex.tv/**
+// @include      *://*.youtube.com/**
 // @run-at       document-start
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_registerMenuCommand
+// @grant        GM_unregisterMenuCommand
 // @license MIT
 // ==/UserScript==
 
 (function() {
     'use strict';
     const console_log = (...args) => console.log('PlexPlaybackSpeed:', ...args);
+
+    const isYouTube = window.location.hostname.includes('youtube.com');
+    let enableYouTube = true;
+
+    if (typeof GM_registerMenuCommand === 'undefined' || typeof GM_unregisterMenuCommand === 'undefined' || typeof GM_getValue === 'undefined' || typeof GM_setValue === 'undefined') {
+        console_log('Userscript API is not available, skipping registering menu command');
+    } else if (isYouTube) {
+        enableYouTube = GM_getValue('enableYouTube', true);
+
+        let menuCmdId = null;
+        const updateMenuCommand = () => {
+            if (menuCmdId !== null) {
+                GM_unregisterMenuCommand(menuCmdId);
+            }
+            menuCmdId = GM_registerMenuCommand(
+                enableYouTube ? 'Disable YouTube Support' : 'Enable YouTube Support',
+                () => {
+                    enableYouTube = !enableYouTube;
+                    GM_setValue('enableYouTube', enableYouTube);
+                    updateMenuCommand();
+
+                    if (isYouTube) {
+                        if (confirm(`YouTube support is now ${enableYouTube ? 'ENABLED' : 'DISABLED'}. Reload page to apply changes?`)) {
+                            window.location.reload();
+                        }
+                    } else {
+                         alert(`YouTube support is now ${enableYouTube ? 'ENABLED' : 'DISABLED'}.\n(Reload YouTube tabs to apply)`);
+                    }
+                }
+            );
+        };
+        updateMenuCommand();
+    }
+
     const cycleSpeeds = [
         0.5, 0.8, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 3, 5, 4, 5, 6, 7, 8, 9, 10, 15, 20
     ];
@@ -144,6 +183,10 @@
     }
 
     function addPlaybackButtonControls() {
+        if (isYouTube) {
+             return;
+        }
+
         const btnStyle = `
             align-items: center;
             border-radius: 15px;
@@ -190,7 +233,9 @@
         }, 500);
     }
 
-    if (window.__plex_playback_speed_control_registered__) {
+    if (isYouTube && !enableYouTube) {
+        console_log('not enabling YouTube playback speed controls');
+    } else if (window.__plex_playback_speed_control_registered__) {
         console_log('plex playback speed controls are already registered');
     } else {
         window.__plex_playback_speed_control_registered__ = true;
