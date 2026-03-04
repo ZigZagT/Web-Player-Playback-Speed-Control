@@ -1,8 +1,8 @@
-# Plex Web Player Playback Speed Control and Keyboard Shortcuts
+# Web Player Playback Speed Control
 
 [Github](https://github.com/ZigZagT/Web-Player-Playback-Speed-Control)
 
-[Greasy Fork](https://greasyfork.org/en/scripts/451667-plex-playback-speed)
+[Greasy Fork](https://greasyfork.org/en/scripts/451667)
 
 
 ## How is this different from native Plex clients?
@@ -60,19 +60,19 @@ Install and update may be automated as follows:
 1. Create a bash script on the server host. For docker deployment, this script will be mounted into plex container as a startup script.
 
 ```bash
-# inject_Plex_Playback_Speed_controls.sh
+# inject_PlaybackSpeedControl.sh
 cd /usr/lib/plexmediaserver/Resources/Plug-ins-*/WebClient.bundle/Contents/Resources
-wget -O "js/PlexPlaybackSpeed.js" "https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js"
-sed -i 's#</head>#<script src="/web/js/PlexPlaybackSpeed.js"></script></head>#' index.html
+wget -O "js/PlaybackSpeedControl.js" "https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js"
+sed -i 's#</head>#<script src="/web/js/PlaybackSpeedControl.js"></script></head>#' index.html
 ```
 
-2. Add execution permission to `inject_Plex_Playback_Speed_controls.sh`.
+2. Add execution permission to `inject_PlaybackSpeedControl.sh`.
 
 ```bash
-chmod a+x inject_Plex_Playback_Speed_controls.sh
+chmod a+x inject_PlaybackSpeedControl.sh
 ```
 
-3. Mount `inject_Plex_Playback_Speed_controls.sh` script into container as start up script:
+3. Mount `inject_PlaybackSpeedControl.sh` script into container as start up script:
 
 ```yaml
 # docker-compose.yaml
@@ -83,7 +83,7 @@ services:
       - /tmp
     volumes:
       # ... other volumes ...
-      - /path/to/inject_Plex_Playback_Speed_controls.sh:/etc/cont-init.d/99-inject_Plex_Playback_Speed_controls.sh
+      - /path/to/inject_PlaybackSpeedControl.sh:/etc/cont-init.d/99-inject_PlaybackSpeedControl.sh
     devices:
       - /dev/dri:/dev/dri
     restart: always
@@ -99,7 +99,7 @@ The automated script mentioned above essentially performs the following tasks:
 1. Locate the WebClient directory in your Plex Server installation. This path varies depends on the server setup. Taking the [plex server docker image provided by linuxserver.io](https://docs.linuxserver.io/images/docker-plex) as example, with image `linuxserver/plex:1.40.0` the WebClient bundle is located at `/usr/lib/plexmediaserver/Resources/Plug-ins-c29d4c0c8/WebClient.bundle/Contents/Resources`.
 2. Save the `PlaybackSpeedControl.user.js` file into the `js` folder.
 3. Rename the downloaded file, and remove `.user` part from the file extension. Otherwise some browser user script extensions may mistakenly hijack the script request.
-4. Edit `index.html` file, add a script tag that points to the script file. The path shuold be prefixed with `/web`. For example, if script file is stored at `js/PlexPlaybackSpeed.js`, the `<script>` tag should be `<script src="/web/js/PlexPlaybackSpeed.js"></script>`
+4. Edit `index.html` file, add a script tag that points to the script file. The path shuold be prefixed with `/web`. For example, if script file is stored at `js/PlaybackSpeedControl.js`, the `<script>` tag should be `<script src="/web/js/PlaybackSpeedControl.js"></script>`
 
 The script will not update automatically with this installation.
 
@@ -114,12 +114,3 @@ The script will not update automatically with this installation.
 2. Enable the extension following its instruction. Make sure you have the `Save Location` setting configured.
 3. Open [this link](https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js) in Safari, and save the file to the `Save Location` of your choice.
 4. Future script updates may be checked and installed automatically by the Userscripts app.
-
-## Troubleshoot
-
-### Web player is laggy, sometime stuck
-
-Try disable the `Direct Play` option and leave `Direct Stream` enabled in the `Plex Web - Debug` settings.
-
-<img width="228" alt="image" src="https://user-images.githubusercontent.com/7879714/191168287-d1b7a12a-6aa2-4d49-afba-8cf32271f670.png">
-

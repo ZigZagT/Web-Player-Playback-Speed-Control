@@ -1,10 +1,10 @@
 // ==UserScript==
-// @name         Plex Playback Speed
+// @name         Playback Speed Control
 // @namespace    https://github.com/ZigZagT
-// @version      1.7.0
+// @version      1.7.1
 // @downloadURL  https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @updateURL    https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
-// @description  Add playback speed controls to plex web player with keyboard shortcuts
+// @description  Add playback speed controls to web players with keyboard shortcuts
 // @author       ZigZagT
 // @include      /^https?://[^/]*plex[^/]*/
 // @include      /^https?://[^/]*:32400/
@@ -21,7 +21,7 @@
 
 (function() {
     'use strict';
-    const console_log = (...args) => console.log('PlexPlaybackSpeed:', ...args);
+    const console_log = (...args) => console.log('PlaybackSpeed:', ...args);
 
     const isYouTube = window.location.hostname.includes('youtube.com');
     let enableYouTube = true;
@@ -235,11 +235,11 @@
 
     if (isYouTube && !enableYouTube) {
         console_log('not enabling YouTube playback speed controls');
-    } else if (window.__plex_playback_speed_control_registered__) {
-        console_log('plex playback speed controls are already registered');
+    } else if (window.__playback_speed_control_registered__) {
+        console_log('playback speed controls are already registered');
     } else {
-        window.__plex_playback_speed_control_registered__ = true;
-        console_log('registering plex playback speed controls');
+        window.__playback_speed_control_registered__ = true;
+        console_log('registering playback speed controls');
         // Use capture phase so our handler intercepts the events before other handlers
         // https://www.quirksmode.org/js/events_order.html#link4
         window.addEventListener("keydown", keyboardUpdateSpeed, true);
