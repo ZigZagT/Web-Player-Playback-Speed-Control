@@ -1,6 +1,6 @@
 # Plex Web Player Playback Speed Control and Keyboard Shortcuts
 
-[Github](https://gist.github.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c)
+[Github](https://github.com/ZigZagT/Web-Player-Playback-Speed-Control)
 
 [Greasy Fork](https://greasyfork.org/en/scripts/451667-plex-playback-speed)
 
@@ -62,7 +62,7 @@ Install and update may be automated as follows:
 ```bash
 # inject_Plex_Playback_Speed_controls.sh
 cd /usr/lib/plexmediaserver/Resources/Plug-ins-*/WebClient.bundle/Contents/Resources
-wget -O "js/PlexPlaybackSpeed.js" "https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js"
+wget -O "js/PlexPlaybackSpeed.js" "https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js"
 sed -i 's#</head>#<script src="/web/js/PlexPlaybackSpeed.js"></script></head>#' index.html
 ```
 
@@ -97,7 +97,7 @@ This method keeps the scripts up-to-date whenever the plex server restarts.
 The automated script mentioned above essentially performs the following tasks:
 
 1. Locate the WebClient directory in your Plex Server installation. This path varies depends on the server setup. Taking the [plex server docker image provided by linuxserver.io](https://docs.linuxserver.io/images/docker-plex) as example, with image `linuxserver/plex:1.40.0` the WebClient bundle is located at `/usr/lib/plexmediaserver/Resources/Plug-ins-c29d4c0c8/WebClient.bundle/Contents/Resources`.
-2. Save the `Plex Playback Speed.user.js` file into the `js` folder.
+2. Save the `PlaybackSpeedControl.user.js` file into the `js` folder.
 3. Rename the downloaded file, and remove `.user` part from the file extension. Otherwise some browser user script extensions may mistakenly hijack the script request.
 4. Edit `index.html` file, add a script tag that points to the script file. The path shuold be prefixed with `/web`. For example, if script file is stored at `js/PlexPlaybackSpeed.js`, the `<script>` tag should be `<script src="/web/js/PlexPlaybackSpeed.js"></script>`
 
@@ -105,14 +105,14 @@ The script will not update automatically with this installation.
 
 ## Install as userscript in Desktop Chrome / Firefox
 1. Install [Tampermonkey](https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=en) or any equivalent user script extension in your browser;
-2. Open [this link](https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js) in your browser. The user script extension should automatically prompt for installation.
+2. Open [this link](https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js) in your browser. The user script extension should automatically prompt for installation.
 3. Future script updates may be checked and installed automatically by user script extension.
 
 
 ## Install as userscript in Safari (macOS Desktop or iOS/iPadOS Safari)
 1. Install the [Userscripts](https://itunes.apple.com/us/app/userscripts/id1463298887) Safari extension from App Store.
 2. Enable the extension following its instruction. Make sure you have the `Save Location` setting configured.
-3. Open [this link](https://gist.githubusercontent.com/ZigZagT/b992bda82b5f7a2c9d214110273d3f3c/raw/Plex%2520Playback%2520Speed.user.js) in Safari, and save the file to the `Save Location` of your choice.
+3. Open [this link](https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js) in Safari, and save the file to the `Save Location` of your choice.
 4. Future script updates may be checked and installed automatically by the Userscripts app.
 
 ## Troubleshoot
