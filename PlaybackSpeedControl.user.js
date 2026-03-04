@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Playback Speed Control
 // @namespace    https://github.com/ZigZagT
-// @version      1.7.1
+// @version      1.7.2
 // @downloadURL  https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @updateURL    https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @description  Add playback speed controls to web players with keyboard shortcuts
@@ -223,11 +223,30 @@
 
     }
 
+    let lastAutoPlayedBtn = null;
+    function autoPlayNext() {
+        const checkbox = document.querySelector('input#autoPlayCheck');
+        if (!checkbox || !checkbox.checked) return;
+
+        const playNextBtn = document.querySelector('button[aria-label="Play Next"]');
+        if (!playNextBtn || playNextBtn === lastAutoPlayedBtn) return;
+
+        console_log('auto-clicking Play Next');
+        lastAutoPlayedBtn = playNextBtn;
+        // Plex UI listens on pointer/mouse events and ignores .click() alone
+        playNextBtn.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
+        playNextBtn.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+        playNextBtn.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}));
+        playNextBtn.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+        playNextBtn.click();
+    }
+
     function scheduleLoopFrame() {
         setTimeout(() => {
             requestAnimationFrame(() => {
                 syncVideoSpeed();
                 addPlaybackButtonControls();
+                autoPlayNext();
                 scheduleLoopFrame();
             });
         }, 500);
