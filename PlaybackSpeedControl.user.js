@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Playback Speed Control
 // @namespace    https://github.com/ZigZagT
-// @version      2.0.0
+// @version      2.0.1
 // @downloadURL  https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @updateURL    https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @description  Add playback speed controls to web players with keyboard shortcuts
@@ -39,25 +39,25 @@
 
     // ─── Multi-Instance Claiming ───
 
-    // Userscript instances claim __playback_speed_control_userscript__.
-    // Non-userscript instances claim __playback_speed_control__ only when no
-    // userscript is present, and self-teardown if a userscript appears later.
+    // Shared state lives on <html> dataset so both the userscript sandbox
+    // and the page's regular JS context can see the same slots.
+    const slots = document.documentElement.dataset;
     if (isUserscript) {
-        if (window.__playback_speed_control_userscript__) {
+        if (slots.playbackSpeedControlUserscript) {
             console_log('userscript instance already running, bailing');
             return;
         }
-        window.__playback_speed_control_userscript__ = true;
+        slots.playbackSpeedControlUserscript = 'active';
     } else {
-        if (window.__playback_speed_control_userscript__) {
+        if (slots.playbackSpeedControlUserscript) {
             console_log('userscript instance present, bailing');
             return;
         }
-        if (window.__playback_speed_control__) {
+        if (slots.playbackSpeedControl) {
             console_log('non-userscript instance already running, bailing');
             return;
         }
-        window.__playback_speed_control__ = true;
+        slots.playbackSpeedControl = 'active';
     }
 
     // ─── Settings ───
@@ -347,7 +347,7 @@
         setTimeout(() => {
             requestAnimationFrame(() => {
                 // Non-userscript self-teardown: if a userscript appeared, stop
-                if (!isUserscript && window.__playback_speed_control_userscript__) {
+                if (!isUserscript && slots.playbackSpeedControlUserscript) {
                     console_log('userscript instance detected, tearing down');
                     abortController.abort();
                     return;
