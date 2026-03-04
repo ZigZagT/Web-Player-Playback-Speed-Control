@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Playback Speed Control
 // @namespace    https://github.com/ZigZagT
-// @version      1.7.2
+// @version      2.0.0
 // @downloadURL  https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @updateURL    https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @description  Add playback speed controls to web players with keyboard shortcuts
@@ -23,38 +23,111 @@
     'use strict';
     const console_log = (...args) => console.log('PlaybackSpeed:', ...args);
 
+    // ─── Site Detection ───
+
+    const isPlex = /plex/i.test(window.location.hostname) || window.location.port === '32400';
     const isYouTube = window.location.hostname.includes('youtube.com');
-    let enableYouTube = true;
 
-    if (typeof GM_registerMenuCommand === 'undefined' || typeof GM_unregisterMenuCommand === 'undefined' || typeof GM_getValue === 'undefined' || typeof GM_setValue === 'undefined') {
-        console_log('Userscript API is not available, skipping registering menu command');
-    } else if (isYouTube) {
-        enableYouTube = GM_getValue('enableYouTube', true);
+    // ─── Runtime Detection ───
 
-        let menuCmdId = null;
-        const updateMenuCommand = () => {
-            if (menuCmdId !== null) {
-                GM_unregisterMenuCommand(menuCmdId);
-            }
-            menuCmdId = GM_registerMenuCommand(
-                enableYouTube ? 'Disable YouTube Support' : 'Enable YouTube Support',
-                () => {
-                    enableYouTube = !enableYouTube;
-                    GM_setValue('enableYouTube', enableYouTube);
-                    updateMenuCommand();
+    const isUserscript = (
+        typeof GM_registerMenuCommand !== 'undefined' &&
+        typeof GM_unregisterMenuCommand !== 'undefined' &&
+        typeof GM_getValue !== 'undefined' &&
+        typeof GM_setValue !== 'undefined'
+    );
 
-                    if (isYouTube) {
-                        if (confirm(`YouTube support is now ${enableYouTube ? 'ENABLED' : 'DISABLED'}. Reload page to apply changes?`)) {
-                            window.location.reload();
-                        }
-                    } else {
-                         alert(`YouTube support is now ${enableYouTube ? 'ENABLED' : 'DISABLED'}.\n(Reload YouTube tabs to apply)`);
-                    }
-                }
-            );
-        };
-        updateMenuCommand();
+    // ─── Multi-Instance Claiming ───
+
+    // Userscript instances claim __playback_speed_control_userscript__.
+    // Non-userscript instances claim __playback_speed_control__ only when no
+    // userscript is present, and self-teardown if a userscript appears later.
+    if (isUserscript) {
+        if (window.__playback_speed_control_userscript__) {
+            console_log('userscript instance already running, bailing');
+            return;
+        }
+        window.__playback_speed_control_userscript__ = true;
+    } else {
+        if (window.__playback_speed_control_userscript__) {
+            console_log('userscript instance present, bailing');
+            return;
+        }
+        if (window.__playback_speed_control__) {
+            console_log('non-userscript instance already running, bailing');
+            return;
+        }
+        window.__playback_speed_control__ = true;
     }
+
+    // ─── Settings ───
+
+    function getSetting(key, defaultValue) {
+        if (!isUserscript) return defaultValue;
+        return GM_getValue(key, defaultValue);
+    }
+
+    function setSetting(key, value) {
+        if (!isUserscript) return;
+        GM_setValue(key, value);
+    }
+
+    let settings = {
+        enablePlex: getSetting('enablePlex', true),
+        enableYouTube: getSetting('enableYouTube', true),
+        plexSkipAutoPlayCountdown: getSetting('plexSkipAutoPlayCountdown', true),
+    };
+
+    // Non-userscript: only Plex features, no YouTube
+    if (!isUserscript && !isPlex) {
+        console_log('non-userscript mode only supports Plex, bailing');
+        return;
+    }
+
+    const siteEnabled = (isPlex && settings.enablePlex) || (isYouTube && settings.enableYouTube);
+    if (!siteEnabled) {
+        console_log('site not enabled, bailing');
+        return;
+    }
+
+    // ─── Menu Commands (userscript only, scoped to current site) ───
+
+    const menuToggles = [];
+    if (isPlex) {
+        menuToggles.push(
+            { key: 'enablePlex', labelOn: 'Plex: Enabled \u2713', labelOff: 'Plex: Disabled \u2717' },
+            { key: 'plexSkipAutoPlayCountdown', labelOn: 'Skip Auto Play Countdown: Enabled \u2713', labelOff: 'Skip Auto Play Countdown: Disabled \u2717' },
+        );
+    }
+    if (isYouTube) {
+        menuToggles.push(
+            { key: 'enableYouTube', labelOn: 'YouTube: Enabled \u2713', labelOff: 'YouTube: Disabled \u2717' },
+        );
+    }
+
+    function registerMenuCommands() {
+        if (!isUserscript) return;
+
+        for (const toggle of menuToggles) {
+            if (toggle.cmdId !== undefined) {
+                GM_unregisterMenuCommand(toggle.cmdId);
+            }
+            const label = settings[toggle.key] ? toggle.labelOn : toggle.labelOff;
+            toggle.cmdId = GM_registerMenuCommand(label, () => {
+                settings[toggle.key] = !settings[toggle.key];
+                setSetting(toggle.key, settings[toggle.key]);
+                registerMenuCommands();
+                const state = settings[toggle.key] ? 'ENABLED' : 'DISABLED';
+                if (confirm(`${toggle.key} is now ${state}. Reload page to apply changes?`)) {
+                    window.location.reload();
+                }
+            });
+        }
+    }
+
+    registerMenuCommands();
+
+    // ─── Common: Playback Speed Control ───
 
     const cycleSpeeds = [
         0.5, 0.8, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 3, 5, 4, 5, 6, 7, 8, 9, 10, 15, 20
@@ -139,7 +212,6 @@
     }
 
     function keyboardUpdateSpeed(e) {
-        // Ignore if user is typing in an input field
         const target = e.target;
         if (target.matches('input, textarea, [contenteditable]')) {
             return;
@@ -182,11 +254,11 @@
         prompt(`Speed: ${newSpeed}x`);
     }
 
-    function addPlaybackButtonControls() {
-        if (isYouTube) {
-             return;
-        }
+    // ─── Plex Module ───
 
+    const instanceId = crypto.randomUUID();
+
+    function addPlaybackButtonControls() {
         const btnStyle = `
             align-items: center;
             border-radius: 15px;
@@ -201,18 +273,29 @@
 
         const containers = document.querySelectorAll('[class*="PlayerControls-buttonGroupRight"]');
         containers.forEach(container => {
-            if (container.querySelector('#playback-speed-btn-slowdown')) {
-                return;
+            const existing = container.querySelector('#playback-speed-btn-slowdown');
+            if (existing) {
+                if (existing.dataset.playbackSpeedOwner === instanceId) {
+                    return;
+                }
+                console_log('removing speed controls owned by', existing.dataset.playbackSpeedOwner);
+                existing.remove();
+                const existingSpeedUp = container.querySelector('#playback-speed-btn-speedup');
+                if (existingSpeedUp) {
+                    existingSpeedUp.remove();
+                }
             }
 
             const btnSlowDown = document.createElement('button');
             btnSlowDown.id = 'playback-speed-btn-slowdown';
+            btnSlowDown.dataset.playbackSpeedOwner = instanceId;
             btnSlowDown.style = btnStyle;
             btnSlowDown.innerHTML = '🐢';
             btnSlowDown.addEventListener('click', btnSlowdownFn);
 
             const btnSpeedUp = document.createElement('button');
             btnSpeedUp.id = 'playback-speed-btn-speedup';
+            btnSpeedUp.dataset.playbackSpeedOwner = instanceId;
             btnSpeedUp.style = btnStyle;
             btnSpeedUp.innerHTML = '🐇';
             btnSpeedUp.addEventListener('click', btnSpeedUpFn);
@@ -220,7 +303,6 @@
             console_log('adding speed controls to', container);
             container.prepend(btnSlowDown, btnSpeedUp);
         })
-
     }
 
     let lastAutoPlayedBtn = null;
@@ -241,27 +323,51 @@
         playNextBtn.click();
     }
 
+    function plexLoopTick() {
+        syncVideoSpeed();
+        addPlaybackButtonControls();
+        if (settings.plexSkipAutoPlayCountdown) {
+            autoPlayNext();
+        }
+    }
+
+    // ─── YouTube Module ───
+
+    function youtubeLoopTick() {
+        syncVideoSpeed();
+    }
+
+    // ─── Main Loop ───
+
+    // AbortController lets the non-userscript instance remove its keyboard
+    // listener cleanly when a userscript instance takes over.
+    const abortController = new AbortController();
+
     function scheduleLoopFrame() {
         setTimeout(() => {
             requestAnimationFrame(() => {
-                syncVideoSpeed();
-                addPlaybackButtonControls();
-                autoPlayNext();
+                // Non-userscript self-teardown: if a userscript appeared, stop
+                if (!isUserscript && window.__playback_speed_control_userscript__) {
+                    console_log('userscript instance detected, tearing down');
+                    abortController.abort();
+                    return;
+                }
+
+                if (isPlex) {
+                    plexLoopTick();
+                } else if (isYouTube) {
+                    youtubeLoopTick();
+                }
                 scheduleLoopFrame();
             });
         }, 500);
     }
 
-    if (isYouTube && !enableYouTube) {
-        console_log('not enabling YouTube playback speed controls');
-    } else if (window.__playback_speed_control_registered__) {
-        console_log('playback speed controls are already registered');
-    } else {
-        window.__playback_speed_control_registered__ = true;
-        console_log('registering playback speed controls');
-        // Use capture phase so our handler intercepts the events before other handlers
-        // https://www.quirksmode.org/js/events_order.html#link4
-        window.addEventListener("keydown", keyboardUpdateSpeed, true);
-        scheduleLoopFrame();
-    }
+    // ─── Registration ───
+
+    console_log(`registering (${isUserscript ? 'as userscript' : 'static script'}, site: ${isPlex ? 'plex' : isYouTube ? 'youtube' : 'unknown'})`);
+    // Capture phase so our handler intercepts events before other handlers
+    // https://www.quirksmode.org/js/events_order.html#link4
+    window.addEventListener("keydown", keyboardUpdateSpeed, { capture: true, signal: abortController.signal });
+    scheduleLoopFrame();
 })();
