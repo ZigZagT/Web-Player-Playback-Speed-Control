@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Playback Speed Control
 // @namespace    https://github.com/ZigZagT
-// @version      2.0.1
+// @version      2.1.1
 // @downloadURL  https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @updateURL    https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @description  Add playback speed controls to web players with keyboard shortcuts
@@ -76,6 +76,8 @@
         enablePlex: getSetting('enablePlex', true),
         enableYouTube: getSetting('enableYouTube', true),
         plexSkipAutoPlayCountdown: getSetting('plexSkipAutoPlayCountdown', true),
+        plexNaturalVolume: getSetting('plexNaturalVolume', true),
+        youtubeNaturalVolume: getSetting('youtubeNaturalVolume', true),
     };
 
     // Non-userscript: only Plex features, no YouTube
@@ -97,11 +99,13 @@
         menuToggles.push(
             { key: 'enablePlex', labelOn: 'Plex: Enabled \u2713', labelOff: 'Plex: Disabled \u2717' },
             { key: 'plexSkipAutoPlayCountdown', labelOn: 'Skip Auto Play Countdown: Enabled \u2713', labelOff: 'Skip Auto Play Countdown: Disabled \u2717' },
+            { key: 'plexNaturalVolume', labelOn: 'Natural Volume Control: Enabled \u2713', labelOff: 'Natural Volume Control: Disabled \u2717' },
         );
     }
     if (isYouTube) {
         menuToggles.push(
             { key: 'enableYouTube', labelOn: 'YouTube: Enabled \u2713', labelOff: 'YouTube: Disabled \u2717' },
+            { key: 'youtubeNaturalVolume', labelOn: 'Natural Volume Control: Enabled \u2713', labelOff: 'Natural Volume Control: Disabled \u2717' },
         );
     }
 
@@ -254,6 +258,105 @@
         prompt(`Speed: ${newSpeed}x`);
     }
 
+    // ─── Common: Natural Volume Control ───
+
+    // Web apps set HTMLMediaElement.volume linearly, but human hearing is
+    // logarithmic. Override the volume property with a dB-linear curve so
+    // site sliders produce perceptually uniform loudness steps.
+    // Conversion functions from Discord's perceptual library (MIT):
+    // https://github.com/discord/perceptual
+    const VOLUME_DYNAMIC_RANGE_DB = 45;
+
+    function perceptualToAmplitude(perceptual, normMax = 1) {
+        if (perceptual <= 0) return 0;
+        if (perceptual >= normMax) return normMax;
+        const db = (perceptual / normMax) * VOLUME_DYNAMIC_RANGE_DB - VOLUME_DYNAMIC_RANGE_DB;
+        return Math.min(normMax, Math.pow(10, db / 20) * normMax);
+    }
+
+    function amplitudeToPerceptual(amplitude, normMax = 1) {
+        if (amplitude <= 0) return 0;
+        if (amplitude >= normMax) return normMax;
+        const db = 20 * Math.log10(amplitude / normMax);
+        return Math.min(normMax, Math.max(0, (VOLUME_DYNAMIC_RANGE_DB + db) / VOLUME_DYNAMIC_RANGE_DB) * normMax);
+    }
+
+    let nativeVolumeDescriptor = null;
+    let volumeOverrideActive = false;
+    const volumeLockValue = isUserscript ? 'userscript' : 'static';
+
+    function removeNaturalVolumeOverride() {
+        if (!volumeOverrideActive) return;
+        if (!nativeVolumeDescriptor) return;
+        if (slots.playbackSpeedControlNaturalVolumeControl !== volumeLockValue) {
+            console.error('playbackSpeedControlNaturalVolumeControl is gone');
+            return;
+        }
+        Object.defineProperty(HTMLMediaElement.prototype, 'volume', nativeVolumeDescriptor);
+        volumeOverrideActive = false;
+        nativeVolumeDescriptor = null;
+        delete slots.playbackSpeedControlNaturalVolumeControl;
+        console_log('natural volume control removed');
+    }
+
+    // YouTube applies loudness normalization by capping video.volume below 1.0.
+    // For videos inside a YouTube player, we read the normalization factor so
+    // our curve anchors at the endpoints: 0→0, normMax→normMax.
+    function getNormMaxYoutube(videoElem) {
+        const player = videoElem.closest('#movie_player');
+        if (!player || !player.getPlayerResponse) return 1;
+        const loudnessDb = player.getPlayerResponse()?.playerConfig?.audioConfig?.loudnessDb;
+        if (loudnessDb == null || loudnessDb <= 0) return 1;
+        return Math.pow(10, -loudnessDb / 20);
+    }
+
+    function syncNaturalVolume() {
+        const shouldActivate = (isPlex && settings.plexNaturalVolume) || (isYouTube && settings.youtubeNaturalVolume);
+        if (!shouldActivate) {
+            removeNaturalVolumeOverride();
+            return;
+        }
+        // already active, either by us or by other instances
+        if (slots.playbackSpeedControlNaturalVolumeControl || volumeOverrideActive) {
+            return;
+        }
+
+        // start activate
+        // set slots.playbackSpeedControlNaturalVolumeControl first so no other instance can active, should we fail in activate process
+        slots.playbackSpeedControlNaturalVolumeControl = volumeLockValue;
+
+        nativeVolumeDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'volume');
+        Object.defineProperty(HTMLMediaElement.prototype, 'volume', {
+            get() {
+                const amplitude = nativeVolumeDescriptor.get.call(this);
+                const normMax = getNormMaxYoutube(this);
+                const perceptual = amplitudeToPerceptual(amplitude, normMax);
+                console_log(`volume get: amplitude=${amplitude.toFixed(4)} → perceptual=${perceptual.toFixed(4)} (normMax=${normMax.toFixed(4)})`);
+                return perceptual;
+            },
+            set(perceptual) {
+                const normMax = getNormMaxYoutube(this);
+                const amplitude = perceptualToAmplitude(perceptual, normMax);
+                console_log(`volume set: perceptual=${perceptual.toFixed(4)} → amplitude=${amplitude.toFixed(4)} (normMax=${normMax.toFixed(4)})`);
+                nativeVolumeDescriptor.set.call(this, amplitude);
+            },
+            configurable: true,
+            enumerable: true,
+        });
+
+        // set volumeOverrideActive last so we don't attempt cleanup, should we fail in activate process
+        volumeOverrideActive = true;
+        console_log('natural volume control applied');
+
+        // Read the value the site set (native, pre-override) and re-set it
+        // through the override so the perceptual curve takes effect immediately
+        const videoElem = document.querySelector("video");
+        if (videoElem) {
+            const siteVolume = nativeVolumeDescriptor.get.call(videoElem);
+            videoElem.volume = siteVolume;
+        }
+    }
+
     // ─── Plex Module ───
 
     const instanceId = crypto.randomUUID();
@@ -324,6 +427,7 @@
     }
 
     function plexLoopTick() {
+        syncNaturalVolume();
         syncVideoSpeed();
         addPlaybackButtonControls();
         if (settings.plexSkipAutoPlayCountdown) {
@@ -334,6 +438,7 @@
     // ─── YouTube Module ───
 
     function youtubeLoopTick() {
+        syncNaturalVolume();
         syncVideoSpeed();
     }
 
@@ -346,9 +451,12 @@
     function scheduleLoopFrame() {
         setTimeout(() => {
             requestAnimationFrame(() => {
-                // Non-userscript self-teardown: if a userscript appeared, stop
+                // Non-userscript self-teardown: if a userscript appeared, stop.
+                // Restore prototype before releasing the lock so the
+                // userscript captures the true native descriptor.
                 if (!isUserscript && slots.playbackSpeedControlUserscript) {
                     console_log('userscript instance detected, tearing down');
+                    removeNaturalVolumeOverride();
                     abortController.abort();
                     return;
                 }
