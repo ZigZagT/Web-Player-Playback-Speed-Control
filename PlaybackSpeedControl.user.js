@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Playback Speed Control
 // @namespace    https://github.com/ZigZagT
-// @version      2.1.1
+// @version      2.2.0
 // @downloadURL  https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @updateURL    https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @description  Add playback speed controls to web players with keyboard shortcuts
@@ -11,6 +11,7 @@
 // @include      *://app.plex.tv/**
 // @include      *://plex.tv/**
 // @include      *://*.youtube.com/**
+// @match        *://*/*
 // @run-at       document-start
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -27,6 +28,17 @@
 
     const isPlex = /plex/i.test(window.location.hostname) || window.location.port === '32400';
     const isYouTube = window.location.hostname.includes('youtube.com');
+    const isKnownSite = isPlex || isYouTube;
+
+    function getNormalizedOrigin() {
+        let hostname = window.location.hostname;
+        if (hostname.startsWith('www.')) {
+            hostname = hostname.substring(4);
+        }
+        const port = window.location.port ? ':' + window.location.port : '';
+        return hostname + port;
+    }
+    const normalizedOrigin = getNormalizedOrigin();
 
     // ─── Runtime Detection ───
 
@@ -78,17 +90,21 @@
         plexSkipAutoPlayCountdown: getSetting('plexSkipAutoPlayCountdown', true),
         plexNaturalVolume: getSetting('plexNaturalVolume', true),
         youtubeNaturalVolume: getSetting('youtubeNaturalVolume', true),
+        naturalVolume: getSetting(`naturalVolume:${normalizedOrigin}`, false),
     };
 
-    // Non-userscript: only Plex features, no YouTube
+    // Non-userscript: only Plex features
     if (!isUserscript && !isPlex) {
         console_log('non-userscript mode only supports Plex, bailing');
         return;
     }
 
-    const siteEnabled = (isPlex && settings.enablePlex) || (isYouTube && settings.enableYouTube);
-    if (!siteEnabled) {
-        console_log('site not enabled, bailing');
+    if (isPlex && !settings.enablePlex) {
+        console_log('Plex disabled, bailing');
+        return;
+    }
+    if (isYouTube && !settings.enableYouTube) {
+        console_log('YouTube disabled, bailing');
         return;
     }
 
@@ -108,6 +124,13 @@
             { key: 'youtubeNaturalVolume', labelOn: 'Natural Volume Control: Enabled \u2713', labelOff: 'Natural Volume Control: Disabled \u2717' },
         );
     }
+    if (!isKnownSite) {
+        menuToggles.push(
+            { key: 'naturalVolume', storageKey: `naturalVolume:${normalizedOrigin}`,
+              labelOn: `Natural Volume (${normalizedOrigin}): Enabled \u2713`,
+              labelOff: `Natural Volume (${normalizedOrigin}): Disabled \u2717` },
+        );
+    }
 
     function registerMenuCommands() {
         if (!isUserscript) return;
@@ -119,8 +142,13 @@
             const label = settings[toggle.key] ? toggle.labelOn : toggle.labelOff;
             toggle.cmdId = GM_registerMenuCommand(label, () => {
                 settings[toggle.key] = !settings[toggle.key];
-                setSetting(toggle.key, settings[toggle.key]);
+                setSetting(toggle.storageKey || toggle.key, settings[toggle.key]);
                 registerMenuCommands();
+                if (!isKnownSite && toggle.key === 'naturalVolume' && settings[toggle.key]) {
+                    alert('Natural Volume applies a generic audio fix to this site. '
+                        + 'It has not been tested here and may not work correctly or could cause audio issues. '
+                        + 'If you experience problems, disable this setting from the Tampermonkey menu.');
+                }
                 const state = settings[toggle.key] ? 'ENABLED' : 'DISABLED';
                 if (confirm(`${toggle.key} is now ${state}. Reload page to apply changes?`)) {
                     window.location.reload();
@@ -311,7 +339,9 @@
     }
 
     function syncNaturalVolume() {
-        const shouldActivate = (isPlex && settings.plexNaturalVolume) || (isYouTube && settings.youtubeNaturalVolume);
+        const shouldActivate = (isPlex && settings.plexNaturalVolume)
+            || (isYouTube && settings.youtubeNaturalVolume)
+            || (!isKnownSite && settings.naturalVolume);
         if (!shouldActivate) {
             removeNaturalVolumeOverride();
             return;
@@ -442,6 +472,12 @@
         syncVideoSpeed();
     }
 
+    // ─── Generic Site Module ───
+
+    function genericLoopTick() {
+        syncNaturalVolume();
+    }
+
     // ─── Main Loop ───
 
     // AbortController lets the non-userscript instance remove its keyboard
@@ -465,6 +501,8 @@
                     plexLoopTick();
                 } else if (isYouTube) {
                     youtubeLoopTick();
+                } else {
+                    genericLoopTick();
                 }
                 scheduleLoopFrame();
             });
@@ -473,9 +511,11 @@
 
     // ─── Registration ───
 
-    console_log(`registering (${isUserscript ? 'as userscript' : 'static script'}, site: ${isPlex ? 'plex' : isYouTube ? 'youtube' : 'unknown'})`);
+    console_log(`registering (${isUserscript ? 'as userscript' : 'static script'}, site: ${isPlex ? 'plex' : isYouTube ? 'youtube' : normalizedOrigin})`);
     // Capture phase so our handler intercepts events before other handlers
     // https://www.quirksmode.org/js/events_order.html#link4
-    window.addEventListener("keydown", keyboardUpdateSpeed, { capture: true, signal: abortController.signal });
+    if (isKnownSite) {
+        window.addEventListener("keydown", keyboardUpdateSpeed, { capture: true, signal: abortController.signal });
+    }
     scheduleLoopFrame();
 })();
