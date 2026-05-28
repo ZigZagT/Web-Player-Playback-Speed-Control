@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Playback Speed Control
 // @namespace    https://github.com/ZigZagT
-// @version      2.2.0
+// @version      2.2.1
 // @downloadURL  https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @updateURL    https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @description  Add playback speed controls to web players with keyboard shortcuts
@@ -389,7 +389,15 @@
 
     // ─── Plex Module ───
 
-    const instanceId = crypto.randomUUID();
+    // crypto.randomUUID may be unavailable. Typically happens in non-HTTPS context.
+    function generateInstanceId() {
+        if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    const instanceId = generateInstanceId();
 
     function addPlaybackButtonControls() {
         const btnStyle = `
