@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Playback Speed Control
 // @namespace    https://github.com/ZigZagT
-// @version      2.2.1
+// @version      2.2.2
 // @downloadURL  https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @updateURL    https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @description  Add playback speed controls to web players with keyboard shortcuts
@@ -293,7 +293,7 @@
     // site sliders produce perceptually uniform loudness steps.
     // Conversion functions from Discord's perceptual library (MIT):
     // https://github.com/discord/perceptual
-    const VOLUME_DYNAMIC_RANGE_DB = 45;
+    const VOLUME_DYNAMIC_RANGE_DB = 55;
 
     function perceptualToAmplitude(perceptual, normMax = 1) {
         if (perceptual <= 0) return 0;
