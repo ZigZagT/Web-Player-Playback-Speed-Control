@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Playback Speed Control
 // @namespace    https://github.com/ZigZagT
-// @version      2.2.2
+// @version      2.3.0
 // @downloadURL  https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @updateURL    https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @description  Add playback speed controls to web players with keyboard shortcuts
@@ -28,9 +28,10 @@
 
     const isPlex = /plex/i.test(window.location.hostname) || window.location.port === '32400';
     const isYouTube = window.location.hostname.includes('youtube.com');
-    const isKnownSite = isPlex || isYouTube;
 
     function getNormalizedOrigin() {
+        if (isPlex) return 'plex';
+        if (isYouTube) return 'youtube';
         let hostname = window.location.hostname;
         if (hostname.startsWith('www.')) {
             hostname = hostname.substring(4);
@@ -39,6 +40,7 @@
         return hostname + port;
     }
     const normalizedOrigin = getNormalizedOrigin();
+    const isKnownSite = normalizedOrigin === 'plex' || normalizedOrigin === 'youtube';
 
     // ─── Runtime Detection ───
 
@@ -84,13 +86,29 @@
         GM_setValue(key, value);
     }
 
+    // v2.2 kept the volume toggle in its own per-site name. Reading the old key
+    // as the fallback means a user who turned the feature off there keeps it
+    // off through the rename.
+    const legacySettingKeys = {
+        'naturalVolume:plex': 'plexNaturalVolume',
+        'naturalVolume:youtube': 'youtubeNaturalVolume',
+    };
+
+    // Features ship on for the sites this script supports out of the box and
+    // are opt-in everywhere else.
+    function getFeatureSetting(feature) {
+        const key = `${feature}:${normalizedOrigin}`;
+        let fallback = isKnownSite;
+        if (legacySettingKeys[key]) {
+            fallback = getSetting(legacySettingKeys[key], fallback);
+        }
+        return getSetting(key, fallback);
+    }
+
     let settings = {
-        enablePlex: getSetting('enablePlex', true),
-        enableYouTube: getSetting('enableYouTube', true),
         plexSkipAutoPlayCountdown: getSetting('plexSkipAutoPlayCountdown', true),
-        plexNaturalVolume: getSetting('plexNaturalVolume', true),
-        youtubeNaturalVolume: getSetting('youtubeNaturalVolume', true),
-        naturalVolume: getSetting(`naturalVolume:${normalizedOrigin}`, false),
+        playbackSpeed: getFeatureSetting('playbackSpeed'),
+        naturalVolume: getFeatureSetting('naturalVolume'),
     };
 
     // Non-userscript: only Plex features
@@ -99,37 +117,37 @@
         return;
     }
 
-    if (isPlex && !settings.enablePlex) {
-        console_log('Plex disabled, bailing');
-        return;
-    }
-    if (isYouTube && !settings.enableYouTube) {
-        console_log('YouTube disabled, bailing');
-        return;
-    }
-
     // ─── Menu Commands (userscript only, scoped to current site) ───
 
-    const menuToggles = [];
+    const menuToggles = [
+        { key: 'playbackSpeed', storageKey: `playbackSpeed:${normalizedOrigin}`,
+          labelOn: `Playback Speed (${normalizedOrigin}): Enabled \u2713`,
+          labelOff: `Playback Speed (${normalizedOrigin}): Disabled \u2717` },
+        { key: 'naturalVolume', storageKey: `naturalVolume:${normalizedOrigin}`,
+          labelOn: `Natural Volume (${normalizedOrigin}): Enabled \u2713`,
+          labelOff: `Natural Volume (${normalizedOrigin}): Disabled \u2717` },
+    ];
     if (isPlex) {
         menuToggles.push(
-            { key: 'enablePlex', labelOn: 'Plex: Enabled \u2713', labelOff: 'Plex: Disabled \u2717' },
             { key: 'plexSkipAutoPlayCountdown', labelOn: 'Skip Auto Play Countdown: Enabled \u2713', labelOff: 'Skip Auto Play Countdown: Disabled \u2717' },
-            { key: 'plexNaturalVolume', labelOn: 'Natural Volume Control: Enabled \u2713', labelOff: 'Natural Volume Control: Disabled \u2717' },
         );
     }
-    if (isYouTube) {
-        menuToggles.push(
-            { key: 'enableYouTube', labelOn: 'YouTube: Enabled \u2713', labelOff: 'YouTube: Disabled \u2717' },
-            { key: 'youtubeNaturalVolume', labelOn: 'Natural Volume Control: Enabled \u2713', labelOff: 'Natural Volume Control: Disabled \u2717' },
-        );
-    }
+
+    // Plex and YouTube are tested; anywhere else the user should know what a
+    // feature will do to their site before it takes over.
     if (!isKnownSite) {
-        menuToggles.push(
-            { key: 'naturalVolume', storageKey: `naturalVolume:${normalizedOrigin}`,
-              labelOn: `Natural Volume (${normalizedOrigin}): Enabled \u2713`,
-              labelOff: `Natural Volume (${normalizedOrigin}): Disabled \u2717` },
-        );
+        const warnings = {
+            playbackSpeed: 'Playback Speed Control takes over the number keys 1-9 and the , . < > keys on this site, '
+                + 'and keeps the player pinned to the speed you pick. '
+                + 'It has not been tested here, so it may shadow the site\'s own keyboard shortcuts or fight its speed controls. '
+                + 'If you experience problems, disable this setting from the Userscript menu.',
+            naturalVolume: 'Natural Volume applies a generic audio fix to this site. '
+                + 'It has not been tested here and may not work correctly or could cause audio issues. '
+                + 'If you experience problems, disable this setting from the Userscript menu.',
+        };
+        for (const toggle of menuToggles) {
+            toggle.warning = warnings[toggle.key];
+        }
     }
 
     function registerMenuCommands() {
@@ -144,15 +162,14 @@
                 settings[toggle.key] = !settings[toggle.key];
                 setSetting(toggle.storageKey || toggle.key, settings[toggle.key]);
                 registerMenuCommands();
-                if (!isKnownSite && toggle.key === 'naturalVolume' && settings[toggle.key]) {
-                    alert('Natural Volume applies a generic audio fix to this site. '
-                        + 'It has not been tested here and may not work correctly or could cause audio issues. '
-                        + 'If you experience problems, disable this setting from the Tampermonkey menu.');
+                if (toggle.warning && settings[toggle.key]) {
+                    alert(toggle.warning);
                 }
-                const state = settings[toggle.key] ? 'ENABLED' : 'DISABLED';
-                if (confirm(`${toggle.key} is now ${state}. Reload page to apply changes?`)) {
-                    window.location.reload();
-                }
+                // Every toggle is read per loop tick and per keypress, so the
+                // change takes effect on the spot. The reload prompt that used
+                // to live here existed for the site-wide kill switches, which
+                // decided at load time whether the script ran at all.
+                console_log(`${toggle.key} is now ${settings[toggle.key] ? 'ENABLED' : 'DISABLED'}`);
             });
         }
     }
@@ -211,6 +228,9 @@
     }
 
     function syncVideoSpeed() {
+        if (!settings.playbackSpeed) {
+            return;
+        }
         const videoElem = document.querySelector("video");
         if (videoElem == null) {
             return;
@@ -244,6 +264,9 @@
     }
 
     function keyboardUpdateSpeed(e) {
+        if (!settings.playbackSpeed) {
+            return;
+        }
         const target = e.target;
         if (target.matches('input, textarea, [contenteditable]')) {
             return;
@@ -339,10 +362,7 @@
     }
 
     function syncNaturalVolume() {
-        const shouldActivate = (isPlex && settings.plexNaturalVolume)
-            || (isYouTube && settings.youtubeNaturalVolume)
-            || (!isKnownSite && settings.naturalVolume);
-        if (!shouldActivate) {
+        if (!settings.naturalVolume) {
             removeNaturalVolumeOverride();
             return;
         }
@@ -446,6 +466,14 @@
         })
     }
 
+    // Toggling speed control off mid-session leaves our buttons on screen with
+    // nothing behind them, so drop the ones this instance owns.
+    function removePlaybackButtonControls() {
+        for (const btn of document.querySelectorAll(`[data-playback-speed-owner="${instanceId}"]`)) {
+            btn.remove();
+        }
+    }
+
     let lastAutoPlayedBtn = null;
     function autoPlayNext() {
         const checkbox = document.querySelector('input#autoPlayCheck');
@@ -467,23 +495,21 @@
     function plexLoopTick() {
         syncNaturalVolume();
         syncVideoSpeed();
-        addPlaybackButtonControls();
+        if (settings.playbackSpeed) {
+            addPlaybackButtonControls();
+        } else {
+            removePlaybackButtonControls();
+        }
         if (settings.plexSkipAutoPlayCountdown) {
             autoPlayNext();
         }
-    }
-
-    // ─── YouTube Module ───
-
-    function youtubeLoopTick() {
-        syncNaturalVolume();
-        syncVideoSpeed();
     }
 
     // ─── Generic Site Module ───
 
     function genericLoopTick() {
         syncNaturalVolume();
+        syncVideoSpeed();
     }
 
     // ─── Main Loop ───
@@ -507,8 +533,6 @@
 
                 if (isPlex) {
                     plexLoopTick();
-                } else if (isYouTube) {
-                    youtubeLoopTick();
                 } else {
                     genericLoopTick();
                 }
@@ -519,11 +543,11 @@
 
     // ─── Registration ───
 
-    console_log(`registering (${isUserscript ? 'as userscript' : 'static script'}, site: ${isPlex ? 'plex' : isYouTube ? 'youtube' : normalizedOrigin})`);
+    console_log(`registering (${isUserscript ? 'as userscript' : 'static script'}, site: ${normalizedOrigin})`);
     // Capture phase so our handler intercepts events before other handlers
     // https://www.quirksmode.org/js/events_order.html#link4
-    if (isKnownSite) {
-        window.addEventListener("keydown", keyboardUpdateSpeed, { capture: true, signal: abortController.signal });
-    }
+    // Registered unconditionally; keyboardUpdateSpeed checks the setting so
+    // toggling speed control from the menu takes effect without a reload.
+    window.addEventListener("keydown", keyboardUpdateSpeed, { capture: true, signal: abortController.signal });
     scheduleLoopFrame();
 })();

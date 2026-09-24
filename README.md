@@ -2,19 +2,19 @@
 
 [Github](https://github.com/ZigZagT/Web-Player-Playback-Speed-Control) · [Greasy Fork](https://greasyfork.org/en/scripts/451667)
 
-A userscript that adds playback-speed controls and a perceptually-correct volume curve to web video players. It supports Plex and YouTube out of the box, and an opt-in perceptual volume curve for any other site with an HTML5 `<video>`.
+A userscript that adds playback-speed controls and a perceptually-correct volume curve to web video players. Both features work on any site with an HTML5 `<video>` — they are on by default on Plex and YouTube, and opt-in per origin everywhere else.
 
 
 ## Supported sites & features
 
 | Feature                                | Plex               | YouTube            | Any other site            |
 | -------------------------------------- | :----------------: | :----------------: | :-----------------------: |
-| Playback speed — keyboard              | ✅                  | ✅                  | —                         |
-| Playback speed — on-screen buttons     | ✅                  | —                  | —                         |
+| Playback speed — keyboard              | ✅ (on by default)  | ✅ (on by default)  | ✅ (opt-in per origin)     |
+| Playback speed — on-screen buttons     | ✅ (on by default)  | —                  | —                         |
 | Natural Volume Control                 | ✅ (on by default)  | ✅ (on by default)  | ✅ (opt-in per origin)     |
 | Skip Auto-Play countdown               | ✅ (on by default)  | —                  | —                         |
 
-Per-feature toggles for the current site are available from the Tampermonkey menu when installed as a userscript.
+Per-feature toggles for the current site are available from the Userscript menu when installed as a userscript.
 
 
 ## Features
@@ -46,15 +46,19 @@ There are multiple ways to alter the playback speed:
 
 Keyboard shortcuts are ignored while typing in input fields, textareas, or contenteditable elements.
 
+Speed control is on by default on Plex and YouTube and can be turned off from the Userscript menu ("Playback Speed (plex)" / "Playback Speed (youtube)"). On every other site it is off until you enable it for that origin — see [Any other site](#any-other-site). While it is on, the script holds the player at the speed you picked, so the site's own speed selector is overridden.
+
 ### Natural Volume Control
 
 Web players (Plex, YouTube, and most sites) wire their volume slider linearly to `HTMLMediaElement.volume`. Human hearing is logarithmic, so a linear slider feels overwhelmingly loud at the top and nearly silent for most of its travel. This script replaces the curve with a dB-linear mapping so equal slider movements produce equal-sounding loudness changes — the same fix Discord applies to its own volume sliders.
 
 Design notes and references: [`designs/natural-volume-control.md`](designs/natural-volume-control.md).
 
-### Tampermonkey menu
+### Userscript menu
 
-When installed as a userscript, the Tampermonkey menu shows toggles relevant to the current site. Changing a toggle prompts to reload the page so the change takes effect. Settings persist across sessions.
+When installed as a userscript, the Userscript menu shows a toggle per feature, labelled with the site it applies to — `Playback Speed (plex)`, `Natural Volume (youtube)`, `Natural Volume (example.com)`. Plex and YouTube each normalize to one name, so a Plex server carries the same settings whatever hostname you reach it on; every other site is keyed by its own origin.
+
+Toggles take effect immediately, with no page reload. Settings persist across sessions.
 
 
 ## Sites
@@ -77,7 +81,7 @@ This script predates [Plex's own playback-speed support, announced on May 15 202
 
 #### Skip Auto-Play countdown
 
-When Plex shows the auto-play countdown at the end of an episode, the script auto-clicks "Play Next" if Plex's own auto-play checkbox is on. Toggle from the Tampermonkey menu: "Skip Auto Play Countdown: Enabled / Disabled".
+When Plex shows the auto-play countdown at the end of an episode, the script auto-clicks "Play Next" if Plex's own auto-play checkbox is on. Toggle from the Userscript menu: "Skip Auto Play Countdown: Enabled / Disabled".
 
 ### YouTube
 
@@ -87,17 +91,28 @@ Playback speed on YouTube uses the same keyboard bindings as Plex; on-screen but
 
 ### Any other site
 
-Natural Volume Control can be enabled on any other site from the Tampermonkey menu — look for `Natural Volume (<origin>)`. The setting is stored per-origin, so enabling it on one site does not affect another. A warning is shown the first time you enable it on a site that hasn't been tested; if you hit any audio issues, disable it from the same menu.
+Both Playback Speed Control and Natural Volume Control can be enabled on any other site from the Userscript menu — look for `Playback Speed (<origin>)` and `Natural Volume (<origin>)`. Each setting is stored per-origin, so enabling one on a site does not affect another. A warning is shown the first time you enable either on a site that hasn't been tested; if you hit any problems, disable it from the same menu.
 
-Playback-speed shortcuts are not active on generic sites.
+Speed control on a generic site uses the same keyboard bindings as Plex — including number keys `1`–`9` — and intercepts them before the page sees them, so it can shadow the site's own shortcuts. On-screen buttons are Plex-only.
 
 
 ## Runtime modes
 
 The script runs in two modes:
 
-- **Userscript** (Tampermonkey / Userscripts extension) — full feature set on all supported sites, settings persisted, menu toggles available.
+- **Userscript** (Userscript / Userscripts extension) — full feature set on all supported sites, settings persisted, menu toggles available.
 - **Static script** (injected into Plex `index.html`) — Plex features only, with defaults hardcoded (no settings UI). If a userscript instance is running on the same page, the static instance steps aside automatically.
+
+
+## Development
+
+The script has no build step and no dependencies. Tests run on Node's built-in test runner (Node 18 or newer):
+
+```bash
+npm test          # or: node --test "test/*.test.js"
+```
+
+`test/harness.js` stands up the globals a userscript manager would provide — a small stub DOM, the `GM_*` storage and menu API, and the timers — then evaluates `PlaybackSpeedControl.user.js`. Timers are fake, so a test advances the script's 500 ms polling loop one iteration at a time with `env.tick()` instead of sleeping.
 
 
 ## How to install
@@ -159,9 +174,9 @@ The script will not update automatically with this installation.
 
 ### Install as userscript in Desktop Chrome / Firefox
 
-Works for all supported sites (Plex, YouTube, and any site you opt in to Natural Volume on).
+Works for all supported sites (Plex, YouTube, and any site you opt in to speed or Natural Volume on).
 
-1. Install [Tampermonkey](https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=en) or any equivalent user script extension in your browser;
+1. Install [Userscript](https://chrome.google.com/webstore/detail/Userscript/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=en) or any equivalent user script extension in your browser;
 2. Open [this link](https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js) in your browser. The user script extension should automatically prompt for installation.
 3. Future script updates may be checked and installed automatically by user script extension.
 
