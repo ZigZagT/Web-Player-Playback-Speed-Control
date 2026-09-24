@@ -1,0 +1,9 @@
+{
+  "name": "web-player-playback-speed-control",
+  "private": true,
+  "description": "Playback speed and perceptual volume controls for web video players, shipped as a userscript",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  }
+}
