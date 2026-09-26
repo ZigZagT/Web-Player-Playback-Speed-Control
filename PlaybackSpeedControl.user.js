@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Playback Speed Control
 // @namespace    https://github.com/ZigZagT
-// @version      2.3.0
+// @version      2.4.0
 // @downloadURL  https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @updateURL    https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @description  Add playback speed controls to web players with keyboard shortcuts
@@ -150,16 +150,54 @@
         }
     }
 
+    let lastActivationReason = null;
+
+    // Saved preferences keep settings reachable without a player; media
+    // controls still need a local video before consuming events.
+    function shouldActivateScript({ requireVideo = false } = {}) {
+        const hasVideo = document.querySelector("video") !== null;
+        let active = false;
+        let reason = 'no video element or saved settings for this site';
+        if (hasVideo) {
+            active = true;
+            reason = 'video element exists in this frame';
+        } else if (menuToggles.some(toggle => {
+            const key = toggle.storageKey || toggle.key;
+            const legacyKey = legacySettingKeys[key];
+            return getSetting(key, undefined) !== undefined ||
+                (legacyKey !== undefined && getSetting(legacyKey, undefined) !== undefined);
+        })) {
+            active = true;
+            reason = 'saved settings exist for this site';
+        }
+        if (reason !== lastActivationReason) {
+            console_log(`script ${active ? 'activated' : 'not activated'} (${normalizedOrigin}): ${reason}`);
+            lastActivationReason = reason;
+        }
+        return active && (!requireVideo || hasVideo);
+    }
+
+    let menuCommandsRegistered = false;
+    let menuLabelsChanged = false;
+
     function registerMenuCommands() {
         if (!isUserscript) return;
+
+        const shouldRegister = shouldActivateScript();
+        if (shouldRegister === menuCommandsRegistered && !menuLabelsChanged) {
+            return;
+        }
 
         for (const toggle of menuToggles) {
             if (toggle.cmdId !== undefined) {
                 GM_unregisterMenuCommand(toggle.cmdId);
+                delete toggle.cmdId;
             }
+            if (!shouldRegister) continue;
             const label = settings[toggle.key] ? toggle.labelOn : toggle.labelOff;
             toggle.cmdId = GM_registerMenuCommand(label, () => {
                 settings[toggle.key] = !settings[toggle.key];
+                menuLabelsChanged = true;
                 setSetting(toggle.storageKey || toggle.key, settings[toggle.key]);
                 registerMenuCommands();
                 if (toggle.warning && settings[toggle.key]) {
@@ -172,9 +210,9 @@
                 console_log(`${toggle.key} is now ${settings[toggle.key] ? 'ENABLED' : 'DISABLED'}`);
             });
         }
+        menuCommandsRegistered = shouldRegister;
+        menuLabelsChanged = false;
     }
-
-    registerMenuCommands();
 
     // ─── Common: Playback Speed Control ───
 
@@ -228,13 +266,10 @@
     }
 
     function syncVideoSpeed() {
-        if (!settings.playbackSpeed) {
+        if (!shouldActivateScript({ requireVideo: true }) || !settings.playbackSpeed) {
             return;
         }
         const videoElem = document.querySelector("video");
-        if (videoElem == null) {
-            return;
-        }
         if (videoElem.playbackRate != currentSpeed) {
             console_log(`setting playbackRate to ${currentSpeed} for`, videoElem);
             videoElem.playbackRate = currentSpeed;
@@ -264,7 +299,7 @@
     }
 
     function keyboardUpdateSpeed(e) {
-        if (!settings.playbackSpeed) {
+        if (!shouldActivateScript({ requireVideo: true }) || !settings.playbackSpeed) {
             return;
         }
         const target = e.target;
@@ -296,6 +331,9 @@
     }
 
     function btnSpeedUpFn() {
+        if (!shouldActivateScript({ requireVideo: true }) || !settings.playbackSpeed) {
+            return;
+        }
         let newSpeed = getNextCycleSpeed('speedup', currentSpeed);
         console_log('change speed to', newSpeed);
         setVideoSpeed(newSpeed);
@@ -303,6 +341,9 @@
     }
 
     function btnSlowdownFn() {
+        if (!shouldActivateScript({ requireVideo: true }) || !settings.playbackSpeed) {
+            return;
+        }
         let newSpeed = getNextCycleSpeed('slowdown', currentSpeed);
         console_log('change speed to', newSpeed);
         setVideoSpeed(newSpeed);
@@ -362,7 +403,7 @@
     }
 
     function syncNaturalVolume() {
-        if (!settings.naturalVolume) {
+        if (!shouldActivateScript() || !settings.naturalVolume) {
             removeNaturalVolumeOverride();
             return;
         }
@@ -476,6 +517,9 @@
 
     let lastAutoPlayedBtn = null;
     function autoPlayNext() {
+        if (!shouldActivateScript() || !settings.plexSkipAutoPlayCountdown) {
+            return;
+        }
         const checkbox = document.querySelector('input#autoPlayCheck');
         if (!checkbox || !checkbox.checked) return;
 
@@ -495,14 +539,12 @@
     function plexLoopTick() {
         syncNaturalVolume();
         syncVideoSpeed();
-        if (settings.playbackSpeed) {
+        if (shouldActivateScript({ requireVideo: true }) && settings.playbackSpeed) {
             addPlaybackButtonControls();
         } else {
             removePlaybackButtonControls();
         }
-        if (settings.plexSkipAutoPlayCountdown) {
-            autoPlayNext();
-        }
+        autoPlayNext();
     }
 
     // ─── Generic Site Module ───
@@ -531,6 +573,7 @@
                     return;
                 }
 
+                registerMenuCommands();
                 if (isPlex) {
                     plexLoopTick();
                 } else {

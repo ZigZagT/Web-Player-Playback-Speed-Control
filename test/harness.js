@@ -160,7 +160,7 @@ function createEventTarget() {
     };
 }
 
-function loadUserscript({ hostname, port = '', stored = {}, userscript = true } = {}) {
+function loadUserscript({ hostname, port = '', stored = {}, userscript = true, withVideo = true } = {}) {
     // A fresh media class per load means the volume descriptor the script
     // overrides is never shared between tests.
     class HTMLMediaElement extends StubElement {}
@@ -177,7 +177,9 @@ function loadUserscript({ hostname, port = '', stored = {}, userscript = true } 
     const video = new HTMLMediaElement('video');
     video.nativeVolumeValue = 1;
     video.playbackRate = 1;
-    body.appendChild(video);
+    if (withVideo) {
+        body.appendChild(video);
+    }
 
     const document = {
         documentElement,
@@ -189,6 +191,7 @@ function loadUserscript({ hostname, port = '', stored = {}, userscript = true } 
 
     const store = new Map(Object.entries(stored));
     const menuCommands = new Map();
+    const menuOperations = [];
     const alerts = [];
     const confirms = [];
     const reloads = [];
@@ -208,6 +211,8 @@ function loadUserscript({ hostname, port = '', stored = {}, userscript = true } 
     globalThis.HTMLMediaElement = HTMLMediaElement;
     globalThis.document = document;
     globalThis.window = window;
+    globalThis.PointerEvent = Event;
+    globalThis.MouseEvent = Event;
     globalThis.alert = (message) => alerts.push(message);
     globalThis.confirm = (message) => { confirms.push(message); return false; };
     globalThis.setTimeout = (fn, delay) => {
@@ -228,10 +233,14 @@ function loadUserscript({ hostname, port = '', stored = {}, userscript = true } 
         globalThis.GM_setValue = (key, value) => store.set(key, value);
         globalThis.GM_registerMenuCommand = (label, fn) => {
             const id = nextMenuId++;
+            menuOperations.push({ type: 'register', id, label });
             menuCommands.set(id, { label, fn });
             return id;
         };
-        globalThis.GM_unregisterMenuCommand = (id) => menuCommands.delete(id);
+        globalThis.GM_unregisterMenuCommand = (id) => {
+            menuOperations.push({ type: 'unregister', id });
+            return menuCommands.delete(id);
+        };
     } else {
         delete globalThis.GM_getValue;
         delete globalThis.GM_setValue;
@@ -253,6 +262,7 @@ function loadUserscript({ hostname, port = '', stored = {}, userscript = true } 
         video,
         body,
         store,
+        menuOperations,
         alerts,
         confirms,
         reloads,

@@ -46,6 +46,8 @@ There are multiple ways to alter the playback speed:
 
 Keyboard shortcuts are ignored while typing in input fields, textareas, or contenteditable elements.
 
+Speed shortcuts and on-screen buttons act only when the current frame contains a `<video>`. Each iframe activates this script independently.
+
 Speed control is on by default on Plex and YouTube and can be turned off from the Userscript menu ("Playback Speed (plex)" / "Playback Speed (youtube)"). On every other site it is off until you enable it for that origin — see [Any other site](#any-other-site). While it is on, the script holds the player at the speed you picked, so the site's own speed selector is overridden.
 
 ### Natural Volume Control
@@ -57,6 +59,10 @@ Design notes and references: [`designs/natural-volume-control.md`](designs/natur
 ### Userscript menu
 
 When installed as a userscript, the Userscript menu shows a toggle per feature, labelled with the site it applies to — `Playback Speed (plex)`, `Natural Volume (youtube)`, `Natural Volume (example.com)`. Plex and YouTube each normalize to one name, so a Plex server carries the same settings whatever hostname you reach it on; every other site is keyed by its own origin.
+
+The script only activates on frames contains a `<video>`, unless any setting has been saved for that frame's site. Built-in defaults and settings for other sites do not count as saved settings for this frame.
+
+Activation decisions and their reasons are logged to the browser console when they change.
 
 Toggles take effect immediately, with no page reload. Settings persist across sessions.
 

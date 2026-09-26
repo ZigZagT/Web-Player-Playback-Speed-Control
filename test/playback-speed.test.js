@@ -57,6 +57,85 @@ test('a handled key is kept away from the page', () => {
     assert.equal(ignored.defaultPrevented, false);
 });
 
+test('shortcuts without a local video neither consume keys nor change the selected speed', () => {
+    for (const userscript of [true, false]) {
+        const env = loadUserscript({
+            hostname: 'app.plex.tv',
+            userscript,
+            withVideo: false,
+            stored: { 'playbackSpeed:plex': true },
+        });
+        for (const key of ['1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '.', '<', '>']) {
+            const event = env.keydown(key);
+            assert.equal(event.defaultPrevented, false, key);
+            assert.equal(event.propagationStopped, false, key);
+            assert.equal(env.document.querySelector('#playback-speed-prompt'), null, key);
+        }
+
+        env.body.appendChild(env.video);
+        env.tick();
+        assert.equal(env.video.playbackRate, 1);
+    }
+});
+
+test('shortcuts follow video insertion and removal without waiting for a loop tick', () => {
+    const env = loadUserscript({ hostname: 'www.youtube.com', withVideo: false });
+    env.body.appendChild(env.video);
+    const handled = env.keydown('3');
+    assert.equal(handled.defaultPrevented, true);
+    assert.equal(handled.propagationStopped, true);
+    assert.equal(env.document.querySelector('#playback-speed-prompt').innerText, 'Speed: 2x');
+    env.document.querySelector('#playback-speed-prompt').remove();
+
+    env.video.remove();
+    const ignored = env.keydown('4');
+    assert.equal(ignored.defaultPrevented, false);
+    assert.equal(ignored.propagationStopped, false);
+    assert.equal(env.document.querySelector('#playback-speed-prompt'), null);
+
+    env.body.appendChild(env.video);
+    env.tick();
+    assert.equal(env.video.playbackRate, 2);
+});
+
+test('saved settings retain menus but never activate video-free speed controls', () => {
+    const env = loadUserscript({
+        hostname: 'app.plex.tv',
+        withVideo: false,
+        stored: { 'playbackSpeed:plex': true },
+    });
+    const controlBar = env.addPlexControlBar();
+    env.tick();
+    assert.equal(env.menuLabels().length, 3);
+    const speedMenu = env.menuItem('Playback Speed (plex): Enabled');
+    assert.ok(speedMenu);
+    assert.equal(controlBar.children.length, 0);
+    assert.equal(env.keydown('3').defaultPrevented, false);
+
+    env.body.appendChild(env.video);
+    assert.equal(env.keydown('3').defaultPrevented, true);
+    env.document.querySelector('#playback-speed-prompt').remove();
+    env.tick();
+    assert.equal(env.video.playbackRate, 2);
+    assert.equal(controlBar.children.length, 2);
+
+    env.video.remove();
+    controlBar.querySelector('#playback-speed-btn-speedup').click();
+    controlBar.querySelector('#playback-speed-btn-slowdown').click();
+    const ignored = env.keydown('4');
+    assert.equal(ignored.defaultPrevented, false);
+    assert.equal(ignored.propagationStopped, false);
+    assert.equal(env.document.querySelector('#playback-speed-prompt'), null);
+    env.tick(3);
+    assert.equal(controlBar.children.length, 0);
+    assert.equal(env.menuItem('Playback Speed (plex): Enabled'), speedMenu);
+
+    env.body.appendChild(env.video);
+    env.tick();
+    assert.equal(controlBar.children.length, 2);
+    assert.equal(env.video.playbackRate, 2);
+});
+
 test('typing in a form field is never treated as a shortcut', () => {
     const env = loadUserscript({ hostname: 'app.plex.tv' });
 
@@ -156,6 +235,43 @@ test('the speed buttons are taken down and put back with the feature', () => {
     env.toggleMenuItem('Playback Speed (plex)');
     env.tick();
     assert.equal(controlBar.children.length, 2);
+});
+
+test('plex speed buttons require a video and ignore clicks immediately after its removal', () => {
+    const env = loadUserscript({ hostname: 'app.plex.tv', withVideo: false });
+    const controlBar = env.addPlexControlBar();
+    env.tick();
+    assert.equal(controlBar.children.length, 0);
+
+    env.body.appendChild(env.video);
+    env.tick();
+    assert.equal(controlBar.children.length, 2);
+
+    env.video.remove();
+    controlBar.querySelector('#playback-speed-btn-speedup').click();
+    controlBar.querySelector('#playback-speed-btn-slowdown').click();
+    assert.equal(env.document.querySelector('#playback-speed-prompt'), null);
+    env.tick();
+    assert.equal(controlBar.children.length, 0);
+
+    env.body.appendChild(env.video);
+    env.tick();
+    assert.equal(controlBar.children.length, 2);
+    assert.equal(env.video.playbackRate, 1);
+});
+
+test('plex speed buttons ignore clicks immediately after the feature is disabled', () => {
+    const env = loadUserscript({ hostname: 'app.plex.tv' });
+    const controlBar = env.addPlexControlBar();
+    env.tick();
+
+    env.toggleMenuItem('Playback Speed (plex)');
+    controlBar.querySelector('#playback-speed-btn-speedup').click();
+    controlBar.querySelector('#playback-speed-btn-slowdown').click();
+    assert.equal(env.document.querySelector('#playback-speed-prompt'), null);
+    env.tick();
+    assert.equal(controlBar.children.length, 0);
+    assert.equal(env.video.playbackRate, 1);
 });
 
 test('only plex gets the on-screen buttons', () => {
