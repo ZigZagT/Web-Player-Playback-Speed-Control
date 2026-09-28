@@ -42,7 +42,7 @@ test('activation logs explain frame eligibility and only repeat when the reason 
     expectedMessages.push(savedSettings);
     assert.deepEqual(activationMessages(env), expectedMessages);
     assert.equal(env.store.get('playbackSpeed:youtube'), false);
-    assert.equal(env.menuLabels().length, 2);
+    assert.equal(env.menuLabels().length, 3);
     const event = env.keydown('3');
     assert.equal(event.defaultPrevented, false);
     assert.equal(event.propagationStopped, false);
@@ -63,7 +63,7 @@ test('script activation does not enable features that are off', () => {
     assert.deepEqual(activationMessages(env), [
         'script activated (example.com): video element exists in this frame',
     ]);
-    assert.equal(env.menuLabels().length, 2);
+    assert.equal(env.menuLabels().length, 3);
     assert.equal(env.keydown('3').defaultPrevented, false);
     assert.equal(env.video.playbackRate, 1);
     assert.equal(env.slots.playbackSpeedControlNaturalVolumeControl, undefined);
@@ -95,7 +95,7 @@ test('the volume override follows script activation without depending on the spe
 
     env.video.remove();
     env.tick();
-    assert.equal(env.menuLabels().length, 2);
+    assert.equal(env.menuLabels().length, 3);
     assert.equal(env.slots.playbackSpeedControlNaturalVolumeControl, 'userscript');
     env.toggleMenuItem('Natural Volume (youtube)');
     env.tick();
@@ -170,17 +170,19 @@ test('initial menu registration waits for the first loop tick, including saved s
         assert.deepEqual(env.menuLabels(), [
             'Playback Speed (example.com): Disabled \u2717',
             'Natural Volume (example.com): Disabled \u2717',
+            'Enable for PiP (example.com): Disabled \u2717',
         ]);
-        assert.equal(env.menuOperations.length, 2);
+        assert.equal(env.menuOperations.length, 3);
     }
 });
 
-test('plex: both features default on and normalize to one plex name', () => {
+test('Plex enables speed, volume and PiP by default under the shared plex settings scope', () => {
     const env = loadUserscript({ hostname: 'app.plex.tv' });
     env.tick();
     assert.deepEqual(env.menuLabels(), [
         'Playback Speed (plex): Enabled \u2713',
         'Natural Volume (plex): Enabled \u2713',
+        'Enable for PiP (plex): Enabled \u2713',
         'Skip Auto Play Countdown: Enabled \u2713',
     ]);
 });
@@ -191,22 +193,176 @@ test('plex is recognized by port, not only by hostname', () => {
     assert.ok(env.menuItem('Playback Speed (plex)'));
 });
 
-test('youtube: both features default on, no plex-only toggle', () => {
+test('YouTube enables speed, volume and PiP by default without the Plex-only toggle', () => {
     const env = loadUserscript({ hostname: 'www.youtube.com' });
     env.tick();
     assert.deepEqual(env.menuLabels(), [
         'Playback Speed (youtube): Enabled \u2713',
         'Natural Volume (youtube): Enabled \u2713',
+        'Enable for PiP (youtube): Enabled \u2713',
     ]);
 });
 
-test('other sites: both features default off and are keyed by normalized origin', () => {
+test('other sites: speed, volume and PiP integration default off and are keyed by normalized origin', () => {
     const env = loadUserscript({ hostname: 'www.example.com' });
     env.tick();
     assert.deepEqual(env.menuLabels(), [
         'Playback Speed (example.com): Disabled \u2717',
         'Natural Volume (example.com): Disabled \u2717',
+        'Enable for PiP (example.com): Disabled \u2717',
     ]);
+});
+
+test('PiP integration defaults register handlers only on known sites without persisting a preference or opening a window', () => {
+    for (const site of [
+        { hostname: 'app.plex.tv', origin: 'plex', enabled: true },
+        { hostname: 'media.example.com', port: '32400', origin: 'plex', enabled: true },
+        { hostname: 'www.youtube.com', origin: 'youtube', enabled: true },
+        { hostname: 'www.example.com', origin: 'example.com', enabled: false },
+    ]) {
+        const env = loadUserscript(site);
+        env.tick(3);
+        assert.ok(env.menuItem(`Enable for PiP (${site.origin}): ${site.enabled ? 'Enabled' : 'Disabled'}`));
+        assert.equal(typeof env.mediaSessionHandler(), site.enabled ? 'function' : 'undefined');
+        assert.equal(env.store.size, 0);
+        assert.equal(env.pipRequestCount(), 0);
+        assert.deepEqual(env.alerts, []);
+        if (site.enabled) {
+            const instructions = env.logs.filter(entry => entry[1]?.startsWith('auto picture-in-picture: Enable for PiP'));
+            assert.equal(instructions.length, 1);
+            assert.match(instructions[0][1], /Chrome controls automatic entry/);
+        }
+    }
+});
+
+test('enabling PiP shows permission instructions in the toggle alert without a separate help command', () => {
+    const env = loadUserscript({ hostname: 'media.example.com', port: '32400' });
+    env.tick();
+    assert.equal(env.menuItem('Automatic PiP setup'), undefined);
+    env.toggleMenuItem('Enable for PiP (plex)');
+    assert.equal(env.alerts.length, 0);
+    env.toggleMenuItem('Enable for PiP (plex)');
+    assert.equal(env.alerts.length, 1);
+    assert.match(env.alerts[0], /https:\/\/media\.example\.com:32400/);
+    assert.match(env.alerts[0], /This script provides the floating player/);
+    assert.match(env.alerts[0], /site controls icon beside the address bar/);
+    assert.match(env.alerts[0], /On \(can ask\).*Off, then On/);
+    assert.match(env.alerts[0], /On \(allowed\)/);
+    assert.match(env.alerts[0], /dropdown instead, choose Allow/);
+    assert.match(env.alerts[0], /Other Chrome requirements still apply/);
+    assert.match(env.alerts[0], /does not change browser permissions or request camera or microphone access/);
+    env.tick(3);
+    assert.equal(env.menuItem('Automatic PiP setup'), undefined);
+    assert.equal(env.menuLabels().length, 4);
+    assert.equal(env.alerts.length, 1);
+    assert.deepEqual(Object.fromEntries(env.store), { 'pictureInPicture:plex': true });
+    assert.equal(env.pipRequestCount(), 0);
+    assert.equal(typeof env.mediaSessionHandler(), 'function');
+});
+
+test('enabling PiP after a saved opt-out shows the same instructions without opening a player', () => {
+    const env = loadUserscript({
+        hostname: 'www.youtube.com',
+        withVideo: false,
+        stored: { 'pictureInPicture:youtube': false },
+    });
+    env.tick();
+    env.toggleMenuItem('Enable for PiP (youtube)');
+    assert.match(env.alerts[0], /Picture-in-Picture is enabled for https:\/\/www\.youtube\.com/);
+    assert.deepEqual(Object.fromEntries(env.store), { 'pictureInPicture:youtube': true });
+    assert.equal(env.mediaSessionHandler(), undefined);
+    assert.equal(env.pipRequestCount(), 0);
+});
+
+test('explicitly enabling PiP shows one setup alert while defaults and repeated ticks do not interrupt playback', () => {
+    for (const site of [
+        { hostname: 'app.plex.tv', origin: 'plex' },
+        { hostname: 'www.youtube.com', origin: 'youtube' },
+    ]) {
+        const env = loadUserscript(site);
+        env.tick(3);
+        assert.deepEqual(env.alerts, []);
+        env.toggleMenuItem(`Enable for PiP (${site.origin})`);
+        assert.deepEqual(env.alerts, []);
+        env.toggleMenuItem(`Enable for PiP (${site.origin})`);
+        assert.equal(env.alerts.length, 1);
+        assert.match(env.alerts[0], /Picture-in-Picture is enabled/);
+        env.tick(3);
+        assert.equal(env.alerts.length, 1);
+        assert.equal(env.pipRequestCount(), 0);
+        assert.equal(env.video.paused, false);
+    }
+});
+
+test('generic-site PiP warning and permission instructions share one user-facing message', () => {
+    const env = loadUserscript({ hostname: 'example.com' });
+    env.tick();
+    env.toggleMenuItem('Enable for PiP (example.com)');
+    assert.equal(env.alerts.length, 1);
+    assert.match(env.alerts[0], /It has not been tested here/);
+    assert.match(env.alerts[0], /Picture-in-Picture is enabled for https:\/\/example\.com/);
+    assert.match(env.alerts[0], /On \(allowed\)/);
+    env.toggleMenuItem('Enable for PiP (example.com)');
+    assert.equal(env.alerts.length, 1);
+});
+
+test('setup menu is not offered by unsupported browsers, child frames or static-script instances', () => {
+    for (const overrides of [
+        { documentPip: false },
+        { topFrame: false },
+        { userscript: false },
+    ]) {
+        const env = loadUserscript({ hostname: 'app.plex.tv', ...overrides });
+        env.tick(3);
+        assert.equal(env.menuItem('Automatic PiP setup'), undefined);
+        assert.deepEqual(env.alerts, []);
+    }
+});
+
+test('existing PiP preferences override new defaults under the unchanged storage key', () => {
+    for (const site of [
+        { hostname: 'app.plex.tv', origin: 'plex' },
+        { hostname: 'www.youtube.com', origin: 'youtube' },
+        { hostname: 'example.com', origin: 'example.com' },
+    ]) {
+        for (const value of [false, true]) {
+            const key = `pictureInPicture:${site.origin}`;
+            const stored = { [key]: value };
+            const env = loadUserscript({ hostname: site.hostname, stored });
+            env.tick();
+            assert.ok(env.menuItem(`Enable for PiP (${site.origin}): ${value ? 'Enabled' : 'Disabled'}`));
+            assert.equal(typeof env.mediaSessionHandler(), value ? 'function' : 'undefined');
+            assert.deepEqual(Object.fromEntries(env.store), stored);
+            env.toggleMenuItem(`Enable for PiP (${site.origin})`);
+            assert.equal(env.store.get(key), !value);
+            assert.equal(typeof env.mediaSessionHandler(), value ? 'undefined' : 'function');
+            const reloaded = loadUserscript({ hostname: site.hostname, stored: Object.fromEntries(env.store) });
+            reloaded.tick();
+            assert.ok(reloaded.menuItem(`Enable for PiP (${site.origin}): ${!value ? 'Enabled' : 'Disabled'}`));
+        }
+    }
+});
+
+test('default PiP integration waits for a local video and remains unavailable in static-script mode', () => {
+    for (const hostname of ['app.plex.tv', 'www.youtube.com']) {
+        const env = loadUserscript({ hostname, withVideo: false });
+        env.tick();
+        assert.equal(env.mediaSessionHandler(), undefined);
+        env.body.appendChild(env.video);
+        env.tick();
+        assert.equal(typeof env.mediaSessionHandler(), 'function');
+        env.video.remove();
+        env.tick();
+        assert.equal(env.mediaSessionHandler(), undefined);
+        assert.equal(env.store.size, 0);
+    }
+    const env = loadUserscript({ hostname: 'app.plex.tv', userscript: false });
+    env.video.disablePictureInPicture = true;
+    env.tick();
+    assert.equal(env.mediaSessionHandler(), undefined);
+    assert.equal(env.video.disablePictureInPicture, true);
+    assert.equal(env.pipRequestCount(), 0);
+    assert.deepEqual(env.menuLabels(), []);
 });
 
 test('non-default ports are part of the normalized origin', () => {
@@ -235,42 +391,44 @@ test('menus follow video insertion and removal without repeatedly registering un
     assert.deepEqual(env.menuLabels(), [
         'Playback Speed (example.com): Disabled \u2717',
         'Natural Volume (example.com): Disabled \u2717',
+        'Enable for PiP (example.com): Disabled \u2717',
     ]);
     const speedCommand = env.menuItem('Playback Speed (example.com)');
     const volumeCommand = env.menuItem('Natural Volume (example.com)');
-    assert.equal(env.menuOperations.length, 2);
+    assert.equal(env.menuOperations.length, 3);
     env.tick(3);
     assert.equal(env.menuItem('Playback Speed (example.com)'), speedCommand);
     assert.equal(env.menuItem('Natural Volume (example.com)'), volumeCommand);
-    assert.equal(env.menuOperations.length, 2);
+    assert.equal(env.menuOperations.length, 3);
 
     env.video.remove();
     env.tick();
     assert.deepEqual(env.menuLabels(), []);
-    assert.equal(env.menuOperations.length, 4);
+    assert.equal(env.menuOperations.length, 6);
     env.tick(3);
     assert.deepEqual(env.menuLabels(), []);
-    assert.equal(env.menuOperations.length, 4);
+    assert.equal(env.menuOperations.length, 6);
 
     env.body.appendChild(env.video);
     env.tick();
     assert.deepEqual(env.menuLabels(), [
         'Playback Speed (example.com): Disabled \u2717',
         'Natural Volume (example.com): Disabled \u2717',
+        'Enable for PiP (example.com): Disabled \u2717',
     ]);
     assert.notEqual(env.menuItem('Playback Speed (example.com)'), speedCommand);
-    assert.equal(env.menuOperations.length, 6);
+    assert.equal(env.menuOperations.length, 9);
 });
 
 test('saved feature settings keep the entire site menu available without a video, including disabled values', () => {
     const sites = [
-        { hostname: 'www.example.com', origin: 'example.com', count: 2 },
-        { hostname: 'video.example.com', port: '8080', origin: 'video.example.com:8080', count: 2 },
-        { hostname: 'app.plex.tv', origin: 'plex', count: 3 },
-        { hostname: 'www.youtube.com', origin: 'youtube', count: 2 },
+        { hostname: 'www.example.com', origin: 'example.com', count: 3 },
+        { hostname: 'video.example.com', port: '8080', origin: 'video.example.com:8080', count: 3 },
+        { hostname: 'app.plex.tv', origin: 'plex', count: 4 },
+        { hostname: 'www.youtube.com', origin: 'youtube', count: 3 },
     ];
     for (const site of sites) {
-        for (const [feature, label] of [['playbackSpeed', 'Playback Speed'], ['naturalVolume', 'Natural Volume']]) {
+        for (const [feature, label] of [['playbackSpeed', 'Playback Speed'], ['naturalVolume', 'Natural Volume'], ['pictureInPicture', 'Enable for PiP']]) {
             for (const value of [true, false]) {
                 const env = loadUserscript({
                     hostname: site.hostname,
@@ -305,6 +463,7 @@ test('saving a setting keeps the menu available after the last video is removed'
     assert.deepEqual(env.menuLabels(), [
         'Playback Speed (example.com): Enabled \u2713',
         'Natural Volume (example.com): Disabled \u2717',
+        'Enable for PiP (example.com): Disabled \u2717',
     ]);
 
     env.toggleMenuItem('Playback Speed (example.com)');
@@ -313,6 +472,7 @@ test('saving a setting keeps the menu available after the last video is removed'
     assert.deepEqual(env.menuLabels(), [
         'Playback Speed (example.com): Disabled \u2717',
         'Natural Volume (example.com): Disabled \u2717',
+        'Enable for PiP (example.com): Disabled \u2717',
     ]);
 });
 
@@ -345,10 +505,10 @@ test('a saved Plex countdown setting retains the Plex menu without a video', () 
             stored: { plexSkipAutoPlayCountdown: value },
         });
         env.tick();
-        assert.equal(env.menuLabels().length, 3);
+        assert.equal(env.menuLabels().length, 4);
         assert.ok(env.menuItem(`Skip Auto Play Countdown: ${value ? 'Enabled' : 'Disabled'}`));
         env.tick();
-        assert.equal(env.menuLabels().length, 3);
+        assert.equal(env.menuLabels().length, 4);
     }
 });
 
@@ -425,13 +585,13 @@ test('toggling relabels the menu command in place', () => {
 test('menu registration preserves feature order and is idempotent before and after label changes', () => {
     const env = loadUserscript({ hostname: 'app.plex.tv' });
     env.tick();
-    assert.equal(env.menuOperations.length, 3);
+    assert.equal(env.menuOperations.length, 4);
 
     const labels = env.menuLabels();
     const commands = labels.map(label => env.menuItem(label));
     env.tick(3);
     assert.deepEqual(env.menuLabels(), labels);
-    assert.equal(env.menuOperations.length, 3);
+    assert.equal(env.menuOperations.length, 4);
     labels.forEach((label, index) => assert.equal(env.menuItem(label), commands[index]));
 
     for (const state of ['Disabled', 'Enabled']) {
@@ -439,6 +599,7 @@ test('menu registration preserves feature order and is idempotent before and aft
         const expectedLabels = [
             `Playback Speed (plex): ${state} ${state === 'Enabled' ? '\u2713' : '\u2717'}`,
             'Natural Volume (plex): Enabled \u2713',
+            'Enable for PiP (plex): Enabled \u2713',
             'Skip Auto Play Countdown: Enabled \u2713',
         ];
         assert.deepEqual(env.menuLabels(), expectedLabels);
@@ -454,24 +615,33 @@ test('menu registration preserves feature order and is idempotent before and aft
 test('cached menu registration refreshes every feature toggle without waiting for a tick', () => {
     const env = loadUserscript({ hostname: 'app.plex.tv' });
     env.tick();
-    const prefixes = ['Playback Speed (plex)', 'Natural Volume (plex)', 'Skip Auto Play Countdown'];
+    const prefixes = [
+        'Playback Speed (plex)',
+        'Natural Volume (plex)',
+        'Enable for PiP (plex)',
+        'Skip Auto Play Countdown',
+    ];
     const enabledLabels = prefixes.map(prefix => `${prefix}: Enabled \u2713`);
     assert.deepEqual(env.menuLabels(), enabledLabels);
+
+    // Re-registering the whole menu costs one unregister and one register per
+    // feature, so a toggle moves the counter by twice the feature count.
+    const operationsPerToggle = enabledLabels.length * 2;
 
     for (const [index, prefix] of prefixes.entries()) {
         const operationsBeforeToggle = env.menuOperations.length;
         env.toggleMenuItem(prefix);
-        const disabledLabels = [...enabledLabels];
-        disabledLabels[index] = `${prefix}: Disabled \u2717`;
-        assert.deepEqual(env.menuLabels(), disabledLabels);
-        assert.equal(env.menuOperations.length, operationsBeforeToggle + 6);
+        const toggledLabels = [...enabledLabels];
+        toggledLabels[index] = `${prefix}: Disabled \u2717`;
+        assert.deepEqual(env.menuLabels(), toggledLabels);
+        assert.equal(env.menuOperations.length, operationsBeforeToggle + operationsPerToggle);
 
         env.toggleMenuItem(prefix);
         assert.deepEqual(env.menuLabels(), enabledLabels);
-        assert.equal(env.menuOperations.length, operationsBeforeToggle + 12);
+        assert.equal(env.menuOperations.length, operationsBeforeToggle + operationsPerToggle * 2);
         env.tick(3);
         assert.deepEqual(env.menuLabels(), enabledLabels);
-        assert.equal(env.menuOperations.length, operationsBeforeToggle + 12);
+        assert.equal(env.menuOperations.length, operationsBeforeToggle + operationsPerToggle * 2);
     }
 });
 
@@ -483,7 +653,7 @@ test('toggling applies immediately instead of asking for a reload', () => {
     assert.deepEqual(env.reloads, []);
 });
 
-test('enabling a feature on an untested site warns first', () => {
+test('enabling a feature on an untested site shows a warning', () => {
     const env = loadUserscript({ hostname: 'example.com' });
     env.tick();
     env.toggleMenuItem('Playback Speed (example.com)');
@@ -492,7 +662,7 @@ test('enabling a feature on an untested site warns first', () => {
 
     env.toggleMenuItem('Natural Volume (example.com)');
     assert.equal(env.alerts.length, 2);
-    assert.match(env.alerts[1], /generic audio fix/);
+    assert.match(env.alerts[1], /volume slider controls loudness/);
 });
 
 test('disabling a feature on an untested site does not warn', () => {
@@ -502,7 +672,7 @@ test('disabling a feature on an untested site does not warn', () => {
     assert.deepEqual(env.alerts, []);
 });
 
-test('tested sites never warn', () => {
+test('speed and volume toggles on tested sites do not warn', () => {
     const env = loadUserscript({ hostname: 'app.plex.tv' });
     env.tick();
     env.toggleMenuItem('Playback Speed (plex)');
@@ -553,7 +723,7 @@ test('static-script mode bails on non-plex sites', () => {
     assert.equal(env.slots.playbackSpeedControlNaturalVolumeControl, undefined);
 });
 
-test('a second instance stands down while one is already running', () => {
+test('a userscript instance claims the frame and registers one keyboard listener', () => {
     const env = loadUserscript({ hostname: 'app.plex.tv' });
     assert.equal(env.slots.playbackSpeedControlUserscript, 'active');
     assert.equal(env.keydownListenerCount(), 1);

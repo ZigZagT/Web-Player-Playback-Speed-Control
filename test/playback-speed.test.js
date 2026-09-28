@@ -98,7 +98,7 @@ test('shortcuts follow video insertion and removal without waiting for a loop ti
     assert.equal(env.video.playbackRate, 2);
 });
 
-test('saved settings retain menus but never activate video-free speed controls', () => {
+test('saved settings keep menus available but do not activate speed controls without a video', () => {
     const env = loadUserscript({
         hostname: 'app.plex.tv',
         withVideo: false,
@@ -106,7 +106,7 @@ test('saved settings retain menus but never activate video-free speed controls',
     });
     const controlBar = env.addPlexControlBar();
     env.tick();
-    assert.equal(env.menuLabels().length, 3);
+    assert.equal(env.menuLabels().length, 4);
     const speedMenu = env.menuItem('Playback Speed (plex): Enabled');
     assert.ok(speedMenu);
     assert.equal(controlBar.children.length, 0);
@@ -166,7 +166,9 @@ test('the chosen speed survives the player resetting it', () => {
 test('a speed change is shown on screen', () => {
     const env = loadUserscript({ hostname: 'app.plex.tv' });
     env.keydown('3');
-    assert.equal(env.document.querySelector('#playback-speed-prompt').innerText, 'Speed: 2x');
+    const prompt = env.document.querySelector('#playback-speed-prompt');
+    assert.equal(prompt.innerText, 'Speed: 2x');
+    assert.match(prompt.style, /(?:^|;)\s*font-size:\s*2em\s*(?:;|$)/);
 });
 
 test('other sites ignore the keys until the site is opted in', () => {
@@ -183,7 +185,7 @@ test('other sites ignore the keys until the site is opted in', () => {
     assert.equal(env.video.playbackRate, 2);
 });
 
-test('turning the feature off stops the script holding the speed', () => {
+test('turning the feature off stops the script from maintaining the selected speed', () => {
     const env = loadUserscript({ hostname: 'app.plex.tv' });
     env.keydown('3');
     env.tick();
@@ -222,7 +224,7 @@ test('the speed buttons change the speed', () => {
     assert.equal(env.video.playbackRate, 1);
 });
 
-test('the speed buttons are taken down and put back with the feature', () => {
+test('the speed buttons are removed when the feature is disabled and restored when it is enabled', () => {
     const env = loadUserscript({ hostname: 'app.plex.tv' });
     const controlBar = env.addPlexControlBar();
     env.tick();

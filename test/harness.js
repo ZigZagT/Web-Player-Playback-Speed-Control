@@ -1,10 +1,10 @@
 // Test harness for PlaybackSpeedControl.user.js.
 //
-// The userscript is a bare IIFE that talks to the DOM, the GM_* API and the
-// timers through globals, so a test has to stand those globals up before
-// evaluating it — the same job a userscript manager does in a real browser.
-// Everything here is the smallest stub that lets the script take its real code
-// path; nothing is mocked that the script does not actually touch.
+// The userscript runs in an immediately invoked function and accesses the
+// document, GM_* functions and timers through globals. The harness provides
+// those globals before evaluating the script, as a userscript manager would.
+// The stubs model only what the tests need. They do not load the real Media
+// Chrome or DOMPurify libraries or simulate browser rendering.
 //
 // Timers are fake. The script polls on a setTimeout(500) → requestAnimationFrame
 // chain, and sleeping through that in real time would make the suite unusable,
@@ -12,6 +12,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const SCRIPT_PATH = path.join(__dirname, '..', 'PlaybackSpeedControl.user.js');
 const scriptSource = fs.readFileSync(SCRIPT_PATH, 'utf8');
@@ -28,10 +29,11 @@ function dashToCamel(name) {
 }
 
 class StubElement {
-    constructor(tagName) {
+    constructor(tagName, ownerDocument = null) {
         this.tagName = tagName.toLowerCase();
         this.children = [];
         this.parentElement = null;
+        this.ownerDocument = ownerDocument;
         this.dataset = {};
         this.attributes = {};
         this.id = '';
@@ -40,6 +42,8 @@ class StubElement {
         this.innerHTML = '';
         this.innerText = '';
         this.eventListeners = {};
+        this.box = { width: 640, height: 360 };
+        this.computedStyle = {};
     }
 
     getAttribute(name) {
@@ -49,12 +53,64 @@ class StubElement {
         return this.attributes[name];
     }
 
-    addEventListener(type, fn) {
-        (this.eventListeners[type] = this.eventListeners[type] || []).push(fn);
+    setAttribute(name, value) {
+        if (name === 'id') this.id = value;
+        else if (name === 'class') this.className = value;
+        else if (name.startsWith('data-')) this.dataset[dashToCamel(name.slice(5))] = value;
+        else this.attributes[name] = value;
+    }
+
+    removeAttribute(name) {
+        if (name === 'id') this.id = '';
+        else if (name === 'class') this.className = '';
+        else if (name.startsWith('data-')) delete this.dataset[dashToCamel(name.slice(5))];
+        else delete this.attributes[name];
+    }
+
+    toggleAttribute(name, force) {
+        const present = this.getAttribute(name) !== undefined;
+        const next = force ?? !present;
+        if (next) this.setAttribute(name, '');
+        else this.removeAttribute(name);
+        return next;
+    }
+
+    get parentNode() {
+        return this.parentElement;
+    }
+
+    get nextSibling() {
+        if (!this.parentElement) return null;
+        const siblings = this.parentElement.children;
+        return siblings[siblings.indexOf(this) + 1] || null;
+    }
+
+    getBoundingClientRect() {
+        return { ...this.box, top: 0, left: 0, right: this.box.width, bottom: this.box.height };
+    }
+
+    // The stub models elements only, so child nodes and child elements are the
+    // same list.
+    get firstChild() {
+        return this.children[0] || null;
+    }
+
+    addEventListener(type, fn, options = {}) {
+        if (options.signal?.aborted) return;
+        const listeners = this.eventListeners[type] = this.eventListeners[type] || [];
+        if (listeners.includes(fn)) return;
+        listeners.push(fn);
+        if (options.signal) {
+            options.signal.addEventListener('abort', () => this.removeEventListener(type, fn), { once: true });
+        }
+    }
+
+    removeEventListener(type, fn) {
+        this.eventListeners[type] = (this.eventListeners[type] || []).filter(listener => listener !== fn);
     }
 
     dispatch(type, event = {}) {
-        for (const fn of this.eventListeners[type] || []) fn(event);
+        for (const fn of [...(this.eventListeners[type] || [])]) fn(event);
         return event;
     }
 
@@ -69,15 +125,40 @@ class StubElement {
         this.dispatch('click', { type: 'click' });
     }
 
-    appendChild(node) {
+    // Inserting a node that already has a parent moves it, and moving it into
+    // another document's tree adopts it — the behaviour Picture-in-Picture
+    // depends on.
+    adopt(ownerDocument) {
+        this.ownerDocument = ownerDocument;
+        for (const child of this.children) child.adopt(ownerDocument);
+    }
+
+    link(node) {
+        if (node.parentElement) node.parentElement.removeChild(node);
         node.parentElement = this;
-        this.children.push(node);
+        node.adopt(this.ownerDocument);
         return node;
     }
 
+    appendChild(node) {
+        this.children.push(this.link(node));
+        return node;
+    }
+
+    append(...nodes) {
+        for (const node of nodes) this.appendChild(node);
+    }
+
     prepend(...nodes) {
-        for (const node of nodes) node.parentElement = this;
-        this.children.unshift(...nodes);
+        for (const node of nodes.reverse()) this.children.unshift(this.link(node));
+    }
+
+    insertBefore(node, reference) {
+        if (node === reference) return node;
+        this.link(node);
+        const index = this.children.indexOf(reference);
+        this.children.splice(index === -1 ? this.children.length : index, 0, node);
+        return node;
     }
 
     removeChild(node) {
@@ -86,6 +167,10 @@ class StubElement {
         this.children.splice(index, 1);
         node.parentElement = null;
         return node;
+    }
+
+    contains(node) {
+        return node === this || this.descendants().includes(node);
     }
 
     remove() {
@@ -150,17 +235,55 @@ function createEventTarget() {
             // The script passes an AbortController signal so a torn-down
             // instance stops receiving keys; honour it like the real target.
             if (options.signal && options.signal.aborted) return;
-            (listeners[type] = listeners[type] || []).push(fn);
+            const registered = (listeners[type] = listeners[type] || []);
+            // Browser event targets ignore repeat registrations with the same
+            // callback and capture flag. The polling loop can therefore register
+            // listeners without tracking previous registrations separately.
+            if (registered.some((entry) => entry.fn === fn && entry.capture === Boolean(options.capture))) return;
+            const entry = { fn, capture: Boolean(options.capture) };
+            registered.push(entry);
             if (options.signal) {
                 options.signal.addEventListener('abort', () => {
-                    listeners[type] = listeners[type].filter((registered) => registered !== fn);
+                    listeners[type] = listeners[type].filter((candidate) => candidate !== entry);
                 });
             }
+        },
+        dispatch(type, event) {
+            for (const entry of [...(listeners[type] || [])]) entry.fn(event);
+            return event;
+        },
+        removeEventListener(type, fn) {
+            listeners[type] = (listeners[type] || []).filter(entry => entry.fn !== fn);
+        },
+        count(type) {
+            return (listeners[type] || []).length;
         },
     };
 }
 
-function loadUserscript({ hostname, port = '', stored = {}, userscript = true, withVideo = true } = {}) {
+function loadUserscript({
+    hostname,
+    port = '',
+    stored = {},
+    userscript = true,
+    withVideo = true,
+    documentPip = true,
+    protocol = 'https:',
+    topFrame = true,
+    deferPipRequest = false,
+    pipRequestError = null,
+    deferLibraries = false,
+    failLibraries = false,
+    libraryApi = true,
+    separateSandbox = false,
+    controllerInitializationError = null,
+    pipTrustedTypes,
+    missingLibraryComponent,
+    mediaSessionAvailable = true,
+    mediaSessionError = null,
+    blockMediaSessionObserver = false,
+    screen = { availWidth: 1920, availHeight: 1080 },
+} = {}) {
     // A fresh media class per load means the volume descriptor the script
     // overrides is never shared between tests.
     class HTMLMediaElement extends StubElement {}
@@ -172,22 +295,112 @@ function loadUserscript({ hostname, port = '', stored = {}, userscript = true, w
     };
     Object.defineProperty(HTMLMediaElement.prototype, 'volume', nativeVolume);
 
-    const documentElement = new StubElement('html');
-    const body = documentElement.appendChild(new StubElement('body'));
-    const video = new HTMLMediaElement('video');
+    // Both the page and the Picture-in-Picture window get the same shape, since
+    // the script treats them as interchangeable surfaces.
+    function createStubDocument() {
+        const root = new StubElement('html');
+        const documentTarget = createEventTarget();
+        const stubDocument = {
+            documentElement: root,
+            visibilityState: 'visible',
+            createElement: (tag) => {
+                const element = new StubElement(tag, stubDocument);
+                if (tag === 'media-controller' && stubDocument.defaultView?.customElements.get(tag)) {
+                    if (controllerInitializationError) throw controllerInitializationError;
+                    element.shadowRoot = {};
+                    Object.defineProperty(element, 'media', { get: () => element.querySelector('[slot="media"]') });
+                }
+                if (tag === 'media-chrome-button' || tag === 'media-playback-rate-menu-button' || tag === 'media-playback-rate-menu') {
+                    Object.defineProperty(element, 'disabled', {
+                        get: () => element.getAttribute('disabled') !== undefined,
+                        set: value => value ? element.setAttribute('disabled', '') : element.removeAttribute('disabled'),
+                    });
+                    element.addEventListener('click', event => {
+                        if (!element.disabled) element.handleClick?.(event);
+                    });
+                }
+                if (tag === 'media-chrome-button') {
+                    let activationKey;
+                    element.addEventListener('keydown', event => {
+                        activationKey = !event.metaKey && !event.altKey && ['Enter', ' '].includes(event.key)
+                            ? event.key : null;
+                    });
+                    element.addEventListener('keyup', event => {
+                        if (activationKey === event.key && !element.disabled) element.handleClick?.(event);
+                        activationKey = null;
+                    });
+                }
+                if (tag === 'media-playback-rate-menu-button' || tag === 'media-playback-rate-menu') {
+                    Object.defineProperty(element, 'mediaPlaybackRate', {
+                        get: () => element.closest('media-controller')?.media?.playbackRate ?? 1,
+                        set: () => { throw new Error('The userscript must not write library display state'); },
+                    });
+                    Object.defineProperty(element, 'innerText', {
+                        get: () => `${element.mediaPlaybackRate}x`,
+                        set: () => { throw new Error('The userscript must not write library display text'); },
+                    });
+                }
+                if (tag === 'media-playback-rate-menu-button') {
+                    element.handleClick = () => {
+                        const menu = element.closest('media-controller')?.querySelector('media-playback-rate-menu');
+                        if (menu) menu.hidden = !menu.hidden;
+                    };
+                }
+                if (tag === 'media-playback-rate-menu') {
+                    element.selectRate = detail => {
+                        if (element.disabled || element.hidden) return;
+                        const rates = element.getAttribute('rates').split(' ').map(Number).sort((a, b) => a - b);
+                        if (!rates.includes(detail)) throw new Error('Rate is not offered by the library menu');
+                        const event = {
+                            detail: String(detail), defaultPrevented: false, propagationStopped: false,
+                            preventDefault() { this.defaultPrevented = true; },
+                            stopImmediatePropagation() { this.propagationStopped = true; },
+                            stopPropagation() { this.propagationStopped = true; },
+                        };
+                        element.lastRateRequest = event;
+                        element.dispatch('mediaplaybackraterequest', event);
+                        const controller = element.closest('media-controller');
+                        // For an unconsumed request, apply the simulated library
+                        // update before invoking the userscript's controller listener.
+                        if (!event.defaultPrevented && !event.propagationStopped && controller?.media) {
+                            controller.media.playbackRate = detail;
+                            controller.dispatch('mediaplaybackraterequest', event);
+                        }
+                        element.hidden = true;
+                    };
+                }
+                return element;
+            },
+            querySelector: (selector) => root.querySelector(selector),
+            querySelectorAll: (selector) => root.querySelectorAll(selector),
+            contains: (node) => root.contains(node),
+            addEventListener: documentTarget.addEventListener,
+            dispatch: documentTarget.dispatch,
+        };
+        root.ownerDocument = stubDocument;
+        stubDocument.head = root.appendChild(new StubElement('head', stubDocument));
+        stubDocument.body = root.appendChild(new StubElement('body', stubDocument));
+        return stubDocument;
+    }
+
+    const document = createStubDocument();
+    const documentElement = document.documentElement;
+    const body = document.body;
+    const video = new HTMLMediaElement('video', document);
     video.nativeVolumeValue = 1;
     video.playbackRate = 1;
+    video.paused = false;
+    video.currentTime = 12.5;
+    video.readyState = 4;
+    video.videoWidth = 1920;
+    video.videoHeight = 1080;
+    video.srcObject = null;
+    video.disablePictureInPicture = false;
+    video.controls = false;
+    video.pause = () => { video.paused = true; };
     if (withVideo) {
         body.appendChild(video);
     }
-
-    const document = {
-        documentElement,
-        body,
-        createElement: (tag) => new StubElement(tag),
-        querySelector: (selector) => documentElement.querySelector(selector),
-        querySelectorAll: (selector) => documentElement.querySelectorAll(selector),
-    };
 
     const store = new Map(Object.entries(stored));
     const menuCommands = new Map();
@@ -196,23 +409,139 @@ function loadUserscript({ hostname, port = '', stored = {}, userscript = true, w
     const confirms = [];
     const reloads = [];
     const logs = [];
+    const consoleCalls = [];
     let nextMenuId = 1;
 
     let timers = [];
     let nextTimerId = 1;
+    const mutationObservers = new Set();
+    globalThis.MutationObserver = class MutationObserver {
+        constructor(callback) { this.callback = callback; }
+        observe() { mutationObservers.add(this); }
+        disconnect() { mutationObservers.delete(this); }
+    };
+    const intervals = new Map();
+    const pendingPipRequests = [];
+    let pipRequestCount = 0;
+    const libraryCalls = [];
+    const pendingLibraries = [];
 
     const windowTarget = createEventTarget();
     const window = {
-        location: { hostname, port, href: `https://${hostname}${port ? ':' + port : ''}/` },
+        screen,
+        location: {
+            hostname, port, protocol,
+            origin: `${protocol}//${hostname}${port ? ':' + port : ''}`,
+            href: `${protocol}//${hostname}${port ? ':' + port : ''}/`,
+        },
         addEventListener: windowTarget.addEventListener,
         reload() { reloads.push(true); },
     };
 
-    globalThis.HTMLMediaElement = HTMLMediaElement;
+    // A userscript manager gives the script a sandbox window and exposes the
+    // page window through unsafeWindow. Media Session and Document
+    // Picture-in-Picture belong to the page window. Keeping them off the
+    // sandbox window checks that the script uses the correct window.
+    const realPageWindow = {
+        ...window,
+        addEventListener: windowTarget.addEventListener,
+        isSecureContext: true,
+    };
+    realPageWindow.top = topFrame ? realPageWindow : {};
+    realPageWindow.self = realPageWindow;
+    realPageWindow.HTMLMediaElement = HTMLMediaElement;
+    globalThis.unsafeWindow = realPageWindow;
+
+    globalThis.HTMLMediaElement = separateSandbox ? class SandboxMediaElement extends StubElement {} : HTMLMediaElement;
     globalThis.document = document;
     globalThis.window = window;
     globalThis.PointerEvent = Event;
     globalThis.MouseEvent = Event;
+
+    const mediaSessionHandlers = {};
+    const mediaSession = {
+        setActionHandler(action, handler) {
+            if (mediaSessionError) throw mediaSessionError;
+            if (handler !== null && typeof handler !== 'function') throw new TypeError('Handler must be a function or null');
+            if (handler === null) delete mediaSessionHandlers[action];
+            else mediaSessionHandlers[action] = handler;
+        },
+    };
+    const capturedSetActionHandler = mediaSession.setActionHandler;
+    if (blockMediaSessionObserver) {
+        Object.defineProperty(mediaSession, 'setActionHandler', { writable: false });
+    }
+    // Only the page window carries these: a script that reads them off the
+    // sandbox window finds nothing and silently never registers.
+    realPageWindow.navigator = { mediaSession: mediaSessionAvailable ? mediaSession : undefined };
+    Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        writable: true,
+        value: {},
+    });
+
+    const pipTargets = new WeakMap();
+    // Simulate closing a Picture-in-Picture window and dispatch pagehide
+    // with its document as the event target.
+    function closeOpenPipWindow(pipWindow = documentPictureInPicture.window) {
+        if (!pipWindow || pipWindow.closed) return;
+        pipWindow.closed = true;
+        if (documentPictureInPicture.window === pipWindow) documentPictureInPicture.window = null;
+        pipTargets.get(pipWindow).dispatch('pagehide', { type: 'pagehide', target: pipWindow.document });
+    }
+
+    const documentPictureInPicture = {
+        window: null,
+        requestWindow: async (options = {}) => {
+            pipRequestCount++;
+            if (pipRequestError) throw pipRequestError;
+            const pipDocument = createStubDocument();
+            pipDocument.documentElement.clientWidth = options.width || 640;
+            pipDocument.documentElement.clientHeight = options.height || 360;
+            pipDocument.documentElement.scrollWidth = options.width || 640;
+            pipDocument.documentElement.scrollHeight = options.height || 360;
+            const target = createEventTarget();
+            const pipWindow = {
+                document: pipDocument,
+                screen: { ...screen },
+                closed: false,
+                requestedOptions: options,
+                innerWidth: options.width || 640,
+                innerHeight: options.height || 360,
+                outerWidth: (options.width || 640) + 8,
+                outerHeight: (options.height || 360) + 42,
+                devicePixelRatio: 1,
+                performance: { now: () => performance.now() },
+                getComputedStyle: element => element.computedStyle,
+                trustedTypes: pipTrustedTypes,
+                addEventListener: target.addEventListener,
+                removeEventListener: target.removeEventListener,
+                dispatchEvent: event => target.dispatch(event.type, event),
+                setTimeout: (fn, delay) => globalThis.setTimeout(fn, delay),
+                clearTimeout: (id) => globalThis.clearTimeout(id),
+                customElements: { get: () => undefined },
+                setInterval: (fn) => {
+                    const id = nextTimerId++;
+                    intervals.set(id, fn);
+                    return id;
+                },
+                clearInterval: (id) => intervals.delete(id),
+                close() { closeOpenPipWindow(pipWindow); },
+            };
+            pipDocument.defaultView = pipWindow;
+            pipTargets.set(pipWindow, target);
+            documentPictureInPicture.window = pipWindow;
+            if (deferPipRequest) {
+                return new Promise((resolve, reject) => pendingPipRequests.push({ resolve, reject, pipWindow }));
+            }
+            return pipWindow;
+        },
+    };
+    if (documentPip) {
+        realPageWindow.documentPictureInPicture = documentPictureInPicture;
+    }
+    delete globalThis.documentPictureInPicture;
+
     globalThis.alert = (message) => alerts.push(message);
     globalThis.confirm = (message) => { confirms.push(message); return false; };
     globalThis.setTimeout = (fn, delay) => {
@@ -222,13 +551,50 @@ function loadUserscript({ hostname, port = '', stored = {}, userscript = true, w
     };
     globalThis.clearTimeout = (id) => { timers = timers.filter((timer) => timer.id !== id); };
     globalThis.requestAnimationFrame = (fn) => globalThis.setTimeout(fn, 0);
-    globalThis.console = {
-        log: (...args) => logs.push(args),
-        error: (...args) => logs.push(args),
-        warn: (...args) => logs.push(args),
-    };
+    globalThis.console = {};
+    for (const method of ['log', 'error', 'warn', 'group', 'groupCollapsed', 'table', 'groupEnd']) {
+        globalThis.console[method] = (...args) => {
+            consoleCalls.push({ method, args });
+            if (method === 'log' || method === 'error' || method === 'warn') logs.push(args);
+        };
+    }
 
     if (userscript) {
+        globalThis.GM_getResourceText = (name) => {
+            libraryCalls.push(name);
+            return `loadTestResource(${JSON.stringify(name)});`;
+        };
+        globalThis.GM_addElement = (parent, tag, attributes) => {
+            if (failLibraries) return null;
+            const script = parent.ownerDocument.createElement(tag);
+            Object.assign(script, attributes);
+            parent.appendChild(script);
+            const pipWindow = parent.ownerDocument.defaultView;
+            const ready = () => {
+                try {
+                    vm.runInNewContext(attributes.textContent, {
+                        window: pipWindow, Event,
+                        loadTestResource(name) {
+                            if (name === 'DOMPurify') {
+                                pipWindow.DOMPurify = { sanitize: html => html };
+                            } else if (name === 'VideoPlayer') {
+                                if (pipTrustedTypes && !pipTrustedTypes.defaultPolicy) {
+                                    throw new TypeError('TrustedHTML required during library initialization');
+                                }
+                                pipWindow.customElements.get = tag => tag === missingLibraryComponent ? undefined : StubElement;
+                            } else {
+                                throw new Error(`Unexpected resource: ${name}`);
+                            }
+                        },
+                    });
+                } catch (error) {
+                    pipTargets.get(pipWindow).dispatch('error', { message: error.message });
+                }
+            };
+            if (deferLibraries) pendingLibraries.push(ready);
+            else ready();
+            return script;
+        };
         globalThis.GM_getValue = (key, fallback) => (store.has(key) ? store.get(key) : fallback);
         globalThis.GM_setValue = (key, value) => store.set(key, value);
         globalThis.GM_registerMenuCommand = (label, fn) => {
@@ -247,6 +613,10 @@ function loadUserscript({ hostname, port = '', stored = {}, userscript = true, w
         delete globalThis.GM_registerMenuCommand;
         delete globalThis.GM_unregisterMenuCommand;
     }
+    if (!userscript || !libraryApi) {
+        delete globalThis.GM_addElement;
+        delete globalThis.GM_getResourceText;
+    }
 
     (0, eval)(scriptSource);
 
@@ -259,6 +629,7 @@ function loadUserscript({ hostname, port = '', stored = {}, userscript = true, w
     return {
         document,
         window,
+        pageWindow: realPageWindow,
         video,
         body,
         store,
@@ -267,7 +638,15 @@ function loadUserscript({ hostname, port = '', stored = {}, userscript = true, w
         confirms,
         reloads,
         logs,
+        consoleCalls,
+        libraryCalls,
+        finishLoadingLibraries() {
+            pendingLibraries.shift()();
+        },
         slots: documentElement.dataset,
+        flushMutations() {
+            for (const observer of mutationObservers) observer.callback();
+        },
 
         // One loop iteration is a setTimeout that schedules a
         // requestAnimationFrame that runs the tick body, so it takes two
@@ -276,6 +655,7 @@ function loadUserscript({ hostname, port = '', stored = {}, userscript = true, w
             for (let i = 0; i < times; i++) {
                 drain();
                 drain();
+                for (const fn of [...intervals.values()]) fn();
             }
         },
 
@@ -288,12 +668,105 @@ function loadUserscript({ hostname, port = '', stored = {}, userscript = true, w
                 preventDefault() { this.defaultPrevented = true; },
                 stopImmediatePropagation() { this.propagationStopped = true; },
             };
-            for (const fn of windowTarget.listeners.keydown || []) fn(event);
+            windowTarget.dispatch('keydown', event);
             return event;
         },
 
         keydownListenerCount() {
-            return (windowTarget.listeners.keydown || []).length;
+            return windowTarget.count('keydown');
+        },
+
+        // The Picture-in-Picture window is a second surface with its own
+        // listeners, so keys have to be delivered there to test the binding.
+        pipWindow() {
+            return documentPictureInPicture.window;
+        },
+
+        pipDocument() {
+            const pipWindow = documentPictureInPicture.window;
+            return pipWindow ? pipWindow.document : null;
+        },
+
+        pipKeydown(key, target = null, composedTarget = null) {
+            const pipWindow = documentPictureInPicture.window;
+            if (!pipWindow) throw new Error('no picture-in-picture window is open');
+            const event = {
+                key,
+                target: target || pipWindow.document.body,
+                defaultPrevented: false,
+                propagationStopped: false,
+                preventDefault() { this.defaultPrevented = true; },
+                stopImmediatePropagation() { this.propagationStopped = true; },
+            };
+            if (composedTarget) event.composedPath = () => [composedTarget, event.target];
+            pipTargets.get(pipWindow).dispatch('keydown', event);
+            return event;
+        },
+
+        pipKeydownListenerCount() {
+            const pipWindow = documentPictureInPicture.window;
+            if (!pipWindow) return 0;
+            return pipTargets.get(pipWindow).count('keydown');
+        },
+
+        pipResize(width, height) {
+            const pipWindow = documentPictureInPicture.window;
+            pipWindow.innerWidth = width;
+            pipWindow.innerHeight = height;
+            Object.assign(pipWindow.document.documentElement, {
+                clientWidth: width, clientHeight: height, scrollWidth: width, scrollHeight: height,
+            });
+            pipTargets.get(pipWindow).dispatch('resize', { type: 'resize' });
+        },
+
+        // Return the Media Session handler Chrome can call to enter Picture-in-Picture.
+        mediaSessionHandler(action = 'enterpictureinpicture') {
+            return mediaSessionHandlers[action];
+        },
+
+        // Simulate the page registering its own handler. Media Session has no
+        // handler getter, but the script can observe calls through the current
+        // setActionHandler method. The captured-method helper bypasses that observer.
+        pageSetsMediaSessionHandler(handler, action = 'enterpictureinpicture') {
+            mediaSession.setActionHandler(action, handler);
+        },
+
+        pageUsesCapturedMediaSessionHandler(handler, action = 'enterpictureinpicture') {
+            capturedSetActionHandler.call(mediaSession, action, handler);
+        },
+
+        setMediaSessionError(error) {
+            mediaSessionError = error;
+        },
+
+        enterPictureInPicture(details) {
+            const handler = mediaSessionHandlers.enterpictureinpicture;
+            if (!handler) throw new Error('no enterpictureinpicture handler is registered');
+            return handler(details);
+        },
+
+        resolvePipRequest() {
+            const pending = pendingPipRequests.shift();
+            pending.resolve(pending.pipWindow);
+        },
+
+        pipRequestCount() {
+            return pipRequestCount;
+        },
+
+        // A window opened by the page itself, which the script must leave alone.
+        openPipWindow(options) {
+            return documentPictureInPicture.requestWindow(options);
+        },
+
+        // Simulate a user closing the window: clear the public window reference,
+        // then dispatch pagehide.
+        closePipWindow() {
+            closeOpenPipWindow();
+        },
+
+        pipPlaceholder() {
+            return document.querySelector('[data-playback-speed-pip-slot]');
         },
 
         menuLabels() {
@@ -320,7 +793,18 @@ function loadUserscript({ hostname, port = '', stored = {}, userscript = true, w
             nativeVolume.set.call(video, value);
         },
 
-        // Plex injects its speed buttons into the player control strip.
+        addPlexPlayer() {
+            const player = new StubElement('div', document);
+            player.className = 'PlayerContainer-container-9f3c1d';
+            const controls = new StubElement('div', document);
+            controls.className = 'PlayerControls-buttonGroupRight-abc123';
+            body.appendChild(player);
+            player.appendChild(video);
+            player.appendChild(controls);
+            return { player, controls };
+        },
+
+        // Provide the control strip where the userscript inserts Plex speed buttons.
         addPlexControlBar() {
             const container = new StubElement('div');
             container.className = 'PlayerControls-buttonGroupRight-abc123';
