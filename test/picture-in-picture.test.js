@@ -140,9 +140,16 @@ test('the original video moves into library controls without moving the site pla
     assert.equal(env.document.contains(controls), true);
     assert.equal(env.document.contains(env.video), false);
     assert.equal(env.video.controls, false);
-    assert.deepEqual(controller.querySelector('media-control-bar').children.map(element => element.tagName), [
-        'media-play-button', 'media-mute-button', 'media-volume-range', 'media-time-range',
-        'media-time-display', 'media-playback-rate-menu-button', 'media-captions-button', 'media-chrome-button',
+    const bars = controller.querySelectorAll('media-control-bar');
+    assert.equal(bars.length, 2);
+    const timeline = controller.querySelector('media-time-range').parentNode;
+    assert.equal(timeline.parentNode, bars[0]);
+    assert.deepEqual(timeline.children.map(element => element.tagName), [
+        'media-time-range', 'media-time-display',
+    ]);
+    assert.deepEqual(bars[0].children.map(element => element.tagName), [
+        'media-play-button', 'media-mute-button', 'media-volume-range',
+        'media-control-bar', 'media-playback-rate-menu-button', 'media-captions-button', 'media-chrome-button',
     ]);
     assert.deepEqual(env.libraryCalls, ['DOMPurify', 'VideoPlayer']);
     env.closePipWindow();
@@ -176,6 +183,65 @@ test('library player layout does not import application stylesheets', async () =
     assert.equal(sheets.length, 1);
     assert.match(sheets[0].textContent, /media-controller/);
     assert.equal(env.pipDocument().querySelector('link'), null);
+});
+
+test('the same controls use two compact rows and one wide row through library breakpoint styles', async () => {
+    const env = loadWithPip();
+    env.tick();
+    await env.enterPictureInPicture();
+    const controller = env.pipDocument().querySelector('media-controller');
+    const bars = controller.querySelectorAll('media-control-bar');
+    const timeline = controller.querySelector('media-time-range').parentNode;
+    const controls = controller.querySelector('media-volume-range').parentNode;
+    assert.equal(timeline.parentNode, controls);
+    assert.equal(controls.parentNode, controller);
+    assert.equal(timeline.className, 'pip-timeline');
+    assert.equal(controller.querySelector('media-time-display').parentNode, timeline);
+    assert.equal(controller.getAttribute('breakpoints'), undefined, 'use the library breakpoint defaults');
+    const css = env.pipDocument().head.querySelector('style').textContent;
+    assert.match(css, /media-controller \{[^}]*--media-control-padding: 4px;/);
+    assert.match(css, /media-controller > media-control-bar \{\s*--media-control-bar-display: grid;/);
+    assert.match(css, /grid-template-columns: auto auto minmax\(60px, 1fr\) auto auto auto;/);
+    assert.match(css, /media-control-bar\.pip-timeline \{\s*--media-control-bar-display: inline-flex;\s*grid-column: 1 \/ -1;\s*grid-row: 1;\s*flex: 1;\s*min-width: 0;/);
+    assert.match(css, /media-volume-range \{ width: 60px; \}/);
+    assert.match(css, /media-controller\[breakpointmd\] \{ --media-control-padding: 10px; \}/);
+    assert.match(css, /media-controller\[breakpointmd\] > media-control-bar \{ --media-control-bar-display: inline-flex; \}/);
+    assert.match(css, /media-controller\[breakpointmd\] media-volume-range \{ width: 100px; \}/);
+    assert.match(css, /media-playback-rate-menu-button \{ margin-left: auto; \}/);
+    assert.doesNotMatch(css, /display:\s*none|opacity:|transition:|userinactive/);
+    for (const bar of bars) {
+        assert.equal(bar.getAttribute('slot'), undefined);
+        assert.equal(bar.getAttribute('noautohide'), undefined);
+        for (const control of bar.children) assert.equal(control.getAttribute('hidden'), undefined);
+    }
+});
+
+test('breakpoint changes preserve control instances, speed selection and the original video', async () => {
+    const env = loadWithPip();
+    env.tick();
+    await env.enterPictureInPicture();
+    const controller = env.pipDocument().querySelector('media-controller');
+    const controls = controller.querySelector('media-control-bar');
+    const children = [...controls.children];
+    const timeline = controller.querySelector('media-time-range').parentNode;
+    const rate = controller.querySelector('media-playback-rate-menu-button');
+    const menu = controller.querySelector('media-playback-rate-menu');
+    const resizeCalls = [];
+    env.pipWindow().resizeTo = (...args) => resizeCalls.push(args);
+    rate.click();
+    menu.selectRate(2.5);
+    for (const [width, wide] of [[575, false], [576, true], [832, true], [240, false]]) {
+        controller.toggleAttribute('breakpointmd', wide);
+        env.pipResize(width, 468);
+        env.tick();
+        assert.deepEqual(controls.children, children);
+        assert.equal(timeline.parentNode, controls);
+        assert.equal(controller.querySelector('media-playback-rate-menu-button'), rate);
+        assert.equal(controller.querySelector('media-playback-rate-menu'), menu);
+        assert.equal(controller.media, env.video);
+        assert.equal(env.video.playbackRate, 2.5);
+    }
+    assert.deepEqual(resizeCalls, []);
 });
 
 test('library injection and player initialization failures preserve the source page', async () => {
@@ -247,6 +313,7 @@ test('policy failures and missing menu components report failure without moving 
         [{ missingLibraryComponent: 'media-playback-rate-menu' }, 'Player libraries did not initialize'],
         [{ missingLibraryComponent: 'media-playback-rate-menu-button' }, 'Player libraries did not initialize'],
         [{ missingLibraryComponent: 'media-chrome-button' }, 'Player libraries did not initialize'],
+        [{ missingLibraryComponent: 'media-text-display' }, 'Player libraries did not initialize'],
     ]) {
         const env = loadWithPip(overrides);
         env.tick();
@@ -365,19 +432,61 @@ test('a window the page opened for itself is left alone', async () => {
     assert.equal(env.pipWindow(), pipWindow);
 });
 
-test('speed keys apply immediately and update the library rate control without a PiP overlay', async () => {
+test('speed keys update the library rate control and top readout without adding the page-style overlay', async () => {
     const env = loadWithPip();
     env.tick();
     await env.enterPictureInPicture();
     const event = env.pipKeydown('3');
     assert.equal(event.defaultPrevented, true);
     assert.equal(env.pipDocument().querySelector('media-playback-rate-menu-button').mediaPlaybackRate, 2);
+    assert.equal(env.pipDocument().querySelector('media-text-display').textContent, 'Speed: 2x');
     assert.equal(env.pipDocument().querySelector('#playback-speed-prompt'), null);
     assert.equal(env.document.querySelector('#playback-speed-prompt'), null);
     assert.equal(env.video.playbackRate, 2);
     env.video.playbackRate = 1;
     env.tick();
     assert.equal(env.video.playbackRate, 2);
+    assert.equal(env.pipDocument().querySelector('media-text-display').textContent, 'Speed: 2x');
+});
+
+test('the top-left rate readout leaves control visibility and timing to Media Chrome', async () => {
+    const env = loadWithPip();
+    env.tick();
+    await env.enterPictureInPicture();
+    env.tick();
+    const controller = env.pipDocument().querySelector('media-controller');
+    const readout = controller.querySelector('media-text-display');
+    assert.equal(readout.parentNode, controller);
+    assert.equal(readout.getAttribute('slot'), 'top-chrome');
+    assert.equal(readout.getAttribute('noautohide'), undefined);
+    assert.equal(controller.getAttribute('noautohide'), undefined);
+    assert.equal(controller.getAttribute('autohide'), undefined);
+    assert.equal(readout.textContent, 'Speed: 1x');
+    const css = env.pipDocument().head.querySelector('style').textContent;
+    assert.match(css, /media-text-display\[slot="top-chrome"\] \{ --media-control-padding: 4px 6px; --media-text-content-height: 20px; \}/);
+    const timers = [];
+    env.pipWindow().setTimeout = (...args) => { timers.push(args); return 0; };
+    controller.setAttribute('userinactive', '');
+    env.video.playbackRate = 1.5;
+    env.video.dispatch('ratechange');
+    assert.equal(readout.textContent, 'Speed: 1.5x');
+    assert.equal(controller.getAttribute('userinactive'), '');
+    controller.removeAttribute('userinactive');
+    env.pipKeydown('3');
+    assert.equal(readout.textContent, 'Speed: 2x');
+    assert.equal(controller.getAttribute('userinactive'), undefined);
+    assert.deepEqual(timers, [], 'the userscript must not create a separate readout timer');
+});
+
+test('speed changes from the opener update the PiP readout instead of creating a page overlay', async () => {
+    const env = loadWithPip();
+    env.tick();
+    await env.enterPictureInPicture();
+    env.keydown('2');
+    assert.equal(env.video.playbackRate, 1.5);
+    assert.equal(env.pipDocument().querySelector('media-text-display').textContent, 'Speed: 1.5x');
+    assert.equal(env.document.querySelector('#playback-speed-prompt'), null);
+    assert.equal(env.pipDocument().querySelector('#playback-speed-prompt'), null);
 });
 
 test('PiP uses the stock library menu to select faster and slower values on every site', async () => {
@@ -392,11 +501,12 @@ test('PiP uses the stock library menu to select faster and slower values on ever
         });
         env.tick();
         await env.enterPictureInPicture();
-        const bar = env.pipDocument().querySelector('media-control-bar');
-        const rate = bar.querySelector('media-playback-rate-menu-button');
+        const rate = env.pipDocument().querySelector('media-playback-rate-menu-button');
+        const bar = rate.closest('media-control-bar');
+        const readout = env.pipDocument().querySelector('media-text-display');
         const menu = env.pipDocument().querySelector('media-playback-rate-menu');
         assert.equal(bar.tagName, 'media-control-bar');
-        assert.equal(env.pipDocument().querySelectorAll('media-control-bar').length, 1);
+        assert.equal(env.pipDocument().querySelectorAll('media-control-bar').length, 2);
         assert.equal(env.pipDocument().querySelectorAll('media-chrome-button').length, 1);
         assert.equal(bar.querySelector('media-chrome-button').getAttribute('aria-label'), 'Resize window to current video');
         assert.equal(bar.getAttribute('slot'), undefined);
@@ -411,10 +521,12 @@ test('PiP uses the stock library menu to select faster and slower values on ever
         assert.equal(env.video.playbackRate, 2.5);
         assert.equal(rate.mediaPlaybackRate, 2.5);
         assert.equal(rate.innerText, '2.5x');
+        assert.equal(readout.textContent, 'Speed: 2.5x');
         rate.click();
         menu.selectRate(0.8);
         assert.equal(env.video.playbackRate, 0.8);
         assert.equal(rate.innerText, '0.8x');
+        assert.equal(readout.textContent, 'Speed: 0.8x');
         assert.equal(menu.lastRateRequest.defaultPrevented, false);
         assert.equal(menu.lastRateRequest.propagationStopped, false);
         assert.equal(env.pipDocument().querySelector('#playback-speed-prompt'), null);
@@ -469,6 +581,7 @@ test('the menu remembers the actual resulting media rate instead of the requeste
     menu.selectRate(2);
     assert.equal(menu.lastRateRequest.detail, '2');
     assert.equal(env.video.playbackRate, 1.5);
+    assert.equal(env.pipDocument().querySelector('media-text-display').textContent, 'Speed: 1.5x');
     assert.deepEqual(writes, [2]);
     env.tick(3);
     assert.equal(env.video.playbackRate, 1.5);
@@ -523,6 +636,9 @@ test('disabling playback speed uses the library disabled state without disabling
     menu.selectRate(1);
     assert.equal(env.video.playbackRate, before);
     assert.equal(env.pipKeydown('5').defaultPrevented, false);
+    env.video.playbackRate = 1.5;
+    env.video.dispatch('ratechange');
+    assert.equal(controller.querySelector('media-text-display').textContent, 'Speed: 1.5x');
     env.toggleMenuItem('Playback Speed (plex)');
     assert.equal(rate.disabled, false);
     assert.equal(menu.disabled, false);
@@ -551,9 +667,13 @@ test('closing the window releases speed listeners and old controls cannot affect
     const first = env.pipDocument().querySelector('media-controller');
     const rate = first.querySelector('media-playback-rate-menu-button');
     const menu = first.querySelector('media-playback-rate-menu');
+    const readout = first.querySelector('media-text-display');
+    const oldText = readout.textContent;
     assert.equal(first.eventListeners.mediaplaybackraterequest.length, 1);
+    assert.equal(env.video.eventListeners.ratechange.length, 1);
     env.closePipWindow();
     assert.equal(first.eventListeners.mediaplaybackraterequest.length, 0);
+    assert.equal(env.video.eventListeners.ratechange.length, 0);
     await env.enterPictureInPicture();
     rate.click();
     menu.selectRate(4);
@@ -561,6 +681,7 @@ test('closing the window releases speed listeners and old controls cannot affect
     env.pipDocument().querySelector('media-playback-rate-menu-button').click();
     env.pipDocument().querySelector('media-playback-rate-menu').selectRate(1.2);
     assert.equal(env.video.playbackRate, 1.2);
+    assert.equal(readout.textContent, oldText);
     env.closePipWindow();
     env.keydown('3');
     assert.equal(env.document.querySelector('#playback-speed-prompt').innerText, 'Speed: 2x');
@@ -572,10 +693,15 @@ test('speed controls ignore input after the site reclaims the video', async () =
     await env.enterPictureInPicture();
     const controller = env.pipDocument().querySelector('media-controller');
     const rate = controller.querySelector('media-playback-rate-menu-button');
+    const readout = controller.querySelector('media-text-display');
+    const oldText = readout.textContent;
     env.body.appendChild(env.video);
+    env.video.playbackRate = 1.5;
+    env.video.dispatch('ratechange');
+    assert.equal(readout.textContent, oldText);
     rate.click();
     controller.querySelector('media-playback-rate-menu').selectRate(3);
-    assert.equal(env.video.playbackRate, 1);
+    assert.equal(env.video.playbackRate, 1.5);
     env.tick();
     assert.equal(env.pipWindow(), null);
     assert.equal(controller.eventListeners.mediaplaybackraterequest.length, 0);
@@ -586,11 +712,14 @@ test('PiP speed controls display the actual media rate when it changes', async (
     env.tick();
     await env.enterPictureInPicture();
     const rate = env.pipDocument().querySelector('media-playback-rate-menu-button');
+    const readout = env.pipDocument().querySelector('media-text-display');
     env.video.playbackRate = 1.5;
     env.video.dispatch('ratechange');
     assert.equal(rate.mediaPlaybackRate, 1.5);
+    assert.equal(readout.textContent, 'Speed: 1.5x');
     env.tick();
     assert.equal(rate.mediaPlaybackRate, 1);
+    assert.equal(readout.textContent, 'Speed: 1x');
 });
 
 test('the field and event guide uses rich console formatting once at load, not per window or snapshot', async () => {
@@ -661,7 +790,7 @@ test('sizing diagnosis leaves video styles untouched and logs requested versus a
     await env.enterPictureInPicture();
     const css = env.pipDocument().head.querySelector('style').textContent;
     assert.match(css, /html, body \{[^}]*overflow: hidden/);
-    assert.match(css, /media-controller \{ display: block; width: 100%; height: 100%; \}/);
+    assert.match(css, /media-controller \{ display: block; width: 100%; height: 100%; --media-control-padding: 4px; \}/);
     assert.match(css, /width: 100% !important; height: 100% !important/);
     assert.doesNotMatch(css, /all:|transform:|object-fit:|resize/);
     env.video.box = { width: 900, height: 500 };
@@ -1076,7 +1205,15 @@ test('Fit video uses the generic library button action hook for mouse and keyboa
     window.resizeTo = (...args) => resizeCalls.push(args);
     const button = env.pipDocument().querySelector('media-chrome-button');
     assert.equal(button.disabled, false);
-    assert.equal(button.textContent, 'Fit video');
+    const icon = button.querySelector('svg');
+    assert.ok(icon);
+    assert.equal(icon.namespaceURI, 'http://www.w3.org/2000/svg');
+    assert.equal(icon.getAttribute('viewBox'), '0 0 26 24');
+    assert.equal(icon.getAttribute('aria-hidden'), 'true');
+    assert.equal(icon.getAttribute('focusable'), 'false');
+    assert.ok(icon.querySelector('path').getAttribute('d').length > 0);
+    assert.deepEqual(button.children.map(child => child.tagName), ['svg', 'span']);
+    assert.equal(env.pipDocument().querySelector('media-fullscreen-button'), null);
     assert.equal(button.getAttribute('aria-label'), 'Resize window to current video');
     assert.equal(button.querySelector('[slot="tooltip-content"]').textContent, 'Resize window to current video');
     assert.equal(button.style, '');

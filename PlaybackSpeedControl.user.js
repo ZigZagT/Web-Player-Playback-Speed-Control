@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Playback Speed Control
 // @namespace    https://github.com/ZigZagT
-// @version      3.0.0
+// @version      3.0.2
 // @downloadURL  https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @updateURL    https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @description  Add playback speed, natural volume, and Picture-in-Picture controls to web players
@@ -24,6 +24,29 @@
 // @resource     DOMPurify https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js#sha256=LJCptG1kY/JgOKKbaG6CvJHeAf2snVIp58/js2ATTqI=
 // @license MIT
 // ==/UserScript==
+
+/*
+Media Chrome expand icon used by the Fit button:
+Copyright (c) 2020 Mux, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
 
 (function() {
     'use strict';
@@ -314,6 +337,7 @@
     function setVideoSpeed(speed) {
         currentSpeed = speed;
         syncVideoSpeed();
+        syncPipSpeedControls();
     }
 
     function syncVideoSpeed() {
@@ -605,14 +629,34 @@
         // The script handles speed shortcuts. Document PiP does not support
         // fullscreen or nested PiP, so omit those controls and shortcuts.
         // https://wicg.github.io/document-picture-in-picture/#fullscreen
+        // Keep the timeline together so responsive styles can place it above
+        // compact controls or between volume and speed in a wider player.
+        // https://www.media-chrome.org/docs/en/position-controls
+        const timeline = pipDocument.createElement('media-control-bar');
+        timeline.className = 'pip-timeline';
+        timeline.append(
+            pipDocument.createElement('media-time-range'),
+            pipDocument.createElement('media-time-display'));
         const bar = pipDocument.createElement('media-control-bar');
         for (const tag of ['media-play-button', 'media-mute-button', 'media-volume-range',
-            'media-time-range', 'media-time-display', 'media-playback-rate-menu-button', 'media-captions-button']) {
+            'media-playback-rate-menu-button', 'media-captions-button']) {
             bar.appendChild(pipDocument.createElement(tag));
         }
+        bar.insertBefore(timeline, bar.querySelector('media-playback-rate-menu-button'));
         const resizeButton = pipDocument.createElement('media-chrome-button');
-        resizeButton.textContent = 'Fit video';
         resizeButton.setAttribute('aria-label', 'Resize window to current video');
+        // Use Media Chrome's expand icon without adding a fullscreen control.
+        // The generic button supplies its icon sizing and colors.
+        // https://github.com/muxinc/media-chrome/blob/v4.19.2/src/js/media-fullscreen-button.ts
+        const svgNamespace = 'http://www.w3.org/2000/svg';
+        const resizeIcon = pipDocument.createElementNS(svgNamespace, 'svg');
+        resizeIcon.setAttribute('viewBox', '0 0 26 24');
+        resizeIcon.setAttribute('aria-hidden', 'true');
+        resizeIcon.setAttribute('focusable', 'false');
+        const resizePath = pipDocument.createElementNS(svgNamespace, 'path');
+        resizePath.setAttribute('d', 'M16 3v2.5h3.5V9H22V3h-6ZM4 9h2.5V5.5H10V3H4v6Zm15.5 9.5H16V21h6v-6h-2.5v3.5ZM6.5 15H4v6h6v-2.5H6.5V15Z');
+        resizeIcon.appendChild(resizePath);
+        resizeButton.appendChild(resizeIcon);
         const resizeTooltip = pipDocument.createElement('span');
         resizeTooltip.setAttribute('slot', 'tooltip-content');
         resizeTooltip.textContent = 'Resize window to current video';
@@ -630,7 +674,13 @@
         rates.setAttribute('anchor', 'auto');
         rates.setAttribute(
             'rates', [...new Set([...cycleSpeeds, ...Object.values(quickSetSpeeds)])].sort((a, b) => a - b).join(' '));
-        controller.append(rates, bar);
+        // The top slot shares the control bars' built-in visibility lifecycle.
+        // Updating the text must not add another hide timer or force controls on.
+        // https://www.media-chrome.org/docs/en/components/media-controller
+        const speedDisplay = pipDocument.createElement('media-text-display');
+        speedDisplay.setAttribute('slot', 'top-chrome');
+        speedDisplay.setAttribute('aria-hidden', 'true');
+        controller.append(speedDisplay, rates, bar);
         if (!controller.shadowRoot) throw new Error('Media Chrome could not initialize in the Picture-in-Picture document');
         return controller;
     }
@@ -644,6 +694,14 @@
         if (rate.disabled !== disabled) rate.disabled = disabled;
         menu.toggleAttribute('disabled', disabled);
         if (disabled) menu.hidden = true;
+        updatePipSpeedDisplay(session);
+    }
+
+    function updatePipSpeedDisplay(session) {
+        if (pipSession !== session || session.restored || !session.controller.contains(session.video)) return;
+        const display = session.controller.querySelector('media-text-display');
+        const text = `Speed: ${session.video.playbackRate}x`;
+        if (display.textContent !== text) display.textContent = text;
     }
 
     function logPipLayoutGuide() {
@@ -749,7 +807,7 @@
             };
             const onError = event => finish(new Error(`Player library failed: ${event.message}`));
             const onReady = () => {
-                if (!pipWindow.DOMPurify || !['media-controller', 'media-chrome-button', 'media-playback-rate-menu',
+                if (!pipWindow.DOMPurify || !['media-controller', 'media-chrome-button', 'media-text-display', 'media-playback-rate-menu',
                     'media-playback-rate-menu-button'].every(tag => pipWindow.customElements.get(tag))) {
                     finish(new Error('Player libraries did not initialize'));
                     return;
@@ -993,8 +1051,28 @@
             // The video's existing inline dimensions would override the library's
             // full-size media slot. Override its size without rewriting its attributes.
             // https://github.com/muxinc/media-chrome/blob/v4.19.2/src/js/media-container.ts
+            // The library's md breakpoint switches the same controls from a
+            // two-row grid to one flex row, without rebuilding or moving them.
+            // https://www.media-chrome.org/docs/en/styling
             layout.textContent = `html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
-                media-controller { display: block; width: 100%; height: 100%; }
+                media-controller { display: block; width: 100%; height: 100%; --media-control-padding: 4px; }
+                media-controller > media-control-bar {
+                    --media-control-bar-display: grid;
+                    grid-template-columns: auto auto minmax(60px, 1fr) auto auto auto;
+                }
+                media-control-bar.pip-timeline {
+                    --media-control-bar-display: inline-flex;
+                    grid-column: 1 / -1;
+                    grid-row: 1;
+                    flex: 1;
+                    min-width: 0;
+                }
+                media-volume-range { width: 60px; }
+                media-playback-rate-menu-button { margin-left: auto; }
+                media-text-display[slot="top-chrome"] { --media-control-padding: 4px 6px; --media-text-content-height: 20px; }
+                media-controller[breakpointmd] { --media-control-padding: 10px; }
+                media-controller[breakpointmd] > media-control-bar { --media-control-bar-display: inline-flex; }
+                media-controller[breakpointmd] media-volume-range { width: 100px; }
                 [${PIP_PLAYER_ATTRIBUTE}="${instanceId}"] { width: 100% !important; height: 100% !important; }`;
             pipWindow.document.head.appendChild(layout);
             session.placeholder = document.createElement('span');
@@ -1012,8 +1090,11 @@
                 if (pipSession === session && !session.restored && settings.playbackSpeed &&
                     session.controller.contains(session.video)) {
                     currentSpeed = session.video.playbackRate;
+                    updatePipSpeedDisplay(session);
                 }
             }, { signal: session.listeners.signal });
+            session.video.addEventListener('ratechange', () => updatePipSpeedDisplay(session),
+                { signal: session.listeners.signal });
             syncPipSpeedControls();
             pipWindow.document.body.appendChild(session.controller);
             session.controlsObserver = new MutationObserver(() => {

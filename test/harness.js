@@ -371,6 +371,11 @@ function loadUserscript({
                 }
                 return element;
             },
+            createElementNS(namespaceURI, tag) {
+                const element = stubDocument.createElement(tag);
+                element.namespaceURI = namespaceURI;
+                return element;
+            },
             querySelector: (selector) => root.querySelector(selector),
             querySelectorAll: (selector) => root.querySelectorAll(selector),
             contains: (node) => root.contains(node),
