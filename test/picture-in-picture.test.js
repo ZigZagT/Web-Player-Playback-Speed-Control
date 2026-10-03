@@ -1208,10 +1208,16 @@ test('Fit video uses the generic library button action hook for mouse and keyboa
     const icon = button.querySelector('svg');
     assert.ok(icon);
     assert.equal(icon.namespaceURI, 'http://www.w3.org/2000/svg');
-    assert.equal(icon.getAttribute('viewBox'), '0 0 26 24');
+    assert.equal(icon.getAttribute('viewBox'), '0 0 24 24');
     assert.equal(icon.getAttribute('aria-hidden'), 'true');
     assert.equal(icon.getAttribute('focusable'), 'false');
-    assert.ok(icon.querySelector('path').getAttribute('d').length > 0);
+    assert.equal(icon.getAttribute('stroke'), 'currentColor');
+    assert.equal(icon.getAttribute('stroke-width'), '2');
+    assert.equal(icon.getAttribute('stroke-linecap'), 'round');
+    assert.equal(icon.getAttribute('stroke-linejoin'), 'round');
+    const paths = icon.querySelectorAll('path');
+    assert.deepEqual(paths.map(path => path.getAttribute('d')), ['M16 4l4 0l0 4', 'M14 10l6 -6', 'M8 20l-4 0l0 -4', 'M4 20l6 -6']);
+    for (const path of paths) assert.equal(path.getAttribute('fill'), 'none');
     assert.deepEqual(button.children.map(child => child.tagName), ['svg', 'span']);
     assert.equal(env.pipDocument().querySelector('media-fullscreen-button'), null);
     assert.equal(button.getAttribute('aria-label'), 'Resize window to current video');

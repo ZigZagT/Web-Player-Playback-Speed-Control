@@ -51,10 +51,13 @@ test('activation logs explain frame eligibility and only repeat when the reason 
 
     env.store.delete('playbackSpeed:youtube');
     env.tick();
-    expectedMessages.push(inactive);
     assert.deepEqual(activationMessages(env), expectedMessages);
-    assert.deepEqual(env.menuLabels(), []);
-    assert.equal(env.slots.playbackSpeedControlNaturalVolumeControl, undefined);
+    assert.equal(env.menuLabels().length, 3);
+    const reloaded = loadUserscript({ hostname: 'www.youtube.com', withVideo: false, stored: Object.fromEntries(env.store) });
+    reloaded.tick();
+    assert.deepEqual(activationMessages(reloaded), [inactive]);
+    assert.deepEqual(reloaded.menuLabels(), []);
+    assert.equal(reloaded.slots.playbackSpeedControlNaturalVolumeControl, undefined);
 });
 
 test('script activation does not enable features that are off', () => {
@@ -624,24 +627,20 @@ test('cached menu registration refreshes every feature toggle without waiting fo
     const enabledLabels = prefixes.map(prefix => `${prefix}: Enabled \u2713`);
     assert.deepEqual(env.menuLabels(), enabledLabels);
 
-    // Re-registering the whole menu costs one unregister and one register per
-    // feature, so a toggle moves the counter by twice the feature count.
-    const operationsPerToggle = enabledLabels.length * 2;
-
     for (const [index, prefix] of prefixes.entries()) {
         const operationsBeforeToggle = env.menuOperations.length;
         env.toggleMenuItem(prefix);
         const toggledLabels = [...enabledLabels];
         toggledLabels[index] = `${prefix}: Disabled \u2717`;
         assert.deepEqual(env.menuLabels(), toggledLabels);
-        assert.equal(env.menuOperations.length, operationsBeforeToggle + operationsPerToggle);
+        assert.equal(env.menuOperations.length, operationsBeforeToggle + 1);
 
         env.toggleMenuItem(prefix);
         assert.deepEqual(env.menuLabels(), enabledLabels);
-        assert.equal(env.menuOperations.length, operationsBeforeToggle + operationsPerToggle * 2);
+        assert.equal(env.menuOperations.length, operationsBeforeToggle + 2);
         env.tick(3);
         assert.deepEqual(env.menuLabels(), enabledLabels);
-        assert.equal(env.menuOperations.length, operationsBeforeToggle + operationsPerToggle * 2);
+        assert.equal(env.menuOperations.length, operationsBeforeToggle + 2);
     }
 });
 
@@ -727,4 +726,363 @@ test('a userscript instance claims the frame and registers one keyboard listener
     const env = loadUserscript({ hostname: 'app.plex.tv' });
     assert.equal(env.slots.playbackSpeedControlUserscript, 'active');
     assert.equal(env.keydownListenerCount(), 1);
+});
+
+test('changing one setting updates its existing menu entry without recreating other entries', () => {
+    const env = loadUserscript({ hostname: 'app.plex.tv' });
+    env.tick();
+    const ids = env.menuCommandIds();
+    const volumeCommand = env.menuItem('Natural Volume (plex)');
+    const before = env.menuOperations.length;
+    env.toggleMenuItem('Playback Speed (plex)');
+    assert.deepEqual(env.menuCommandIds(), ids);
+    assert.equal(env.menuItem('Natural Volume (plex)'), volumeCommand);
+    assert.deepEqual(env.menuOperations.slice(before), [{
+        type: 'update', id: ids[0], label: 'Playback Speed (plex): Disabled \u2717',
+    }]);
+});
+
+test('a partial registration failure retains successful entries and retries missing entries', () => {
+    const env = loadUserscript({ hostname: 'app.plex.tv' });
+    env.failMenuOperation('register', 2);
+    assert.doesNotThrow(() => env.tick());
+    const firstId = env.menuCommandIds()[0];
+    assert.ok(env.logs.some(entry => entry.join(' ').includes('Menu register failed')));
+    env.tick();
+    assert.equal(env.menuCommandIds()[0], firstId);
+    assert.equal(env.menuLabels().length, 4);
+    assert.equal(new Set(env.menuLabels()).size, 4);
+    const count = env.menuOperations.length;
+    env.tick(3);
+    assert.equal(env.menuOperations.length, count);
+});
+
+test('a failed menu update leaves the old entry intact and retries without duplicating it', () => {
+    const env = loadUserscript({ hostname: 'app.plex.tv' });
+    env.tick();
+    const ids = env.menuCommandIds();
+    env.failMenuOperation('register');
+    assert.doesNotThrow(() => env.toggleMenuItem('Playback Speed (plex)'));
+    assert.equal(env.store.get('playbackSpeed:plex'), false);
+    assert.ok(env.menuItem('Playback Speed (plex): Enabled'));
+    env.tick();
+    assert.ok(env.menuItem('Playback Speed (plex): Disabled'));
+    assert.deepEqual(env.menuCommandIds(), ids);
+    assert.equal(env.menuLabels().length, 4);
+});
+
+test('failed menu removal retains the entry ID until removal succeeds', () => {
+    const env = loadUserscript({ hostname: 'example.com' });
+    env.tick();
+    const ids = env.menuCommandIds();
+    env.video.remove();
+    env.failMenuOperation('unregister', 2);
+    assert.doesNotThrow(() => env.tick());
+    assert.deepEqual(env.menuCommandIds(), ids.slice(1));
+    env.tick();
+    assert.deepEqual(env.menuCommandIds(), []);
+    env.body.appendChild(env.video);
+    env.tick();
+    assert.equal(env.menuLabels().length, 3);
+    assert.equal(new Set(env.menuLabels()).size, 3);
+});
+
+test('a failed preference write does not change the displayed or applied setting', () => {
+    const env = loadUserscript({ hostname: 'app.plex.tv' });
+    env.tick();
+    const command = env.menuItem('Playback Speed (plex): Enabled');
+    env.setStorageWriteError(new Error('Preference write failed'));
+    assert.doesNotThrow(() => command.fn());
+    assert.equal(env.menuItem('Playback Speed (plex): Enabled'), command);
+    assert.equal(env.store.has('playbackSpeed:plex'), false);
+    env.keydown('3');
+    assert.equal(env.video.playbackRate, 2);
+    assert.ok(env.logs.some(entry => entry.join(' ').includes('Preference write failed')));
+    env.setStorageWriteError(null);
+    command.fn();
+    assert.ok(env.menuItem('Playback Speed (plex): Disabled'));
+});
+
+test('a menu callback applies the action represented by its label rather than inverting newer state', () => {
+    const env = loadUserscript({ hostname: 'app.plex.tv' });
+    env.tick();
+    const disable = env.menuItem('Playback Speed (plex): Enabled').fn;
+    disable();
+    disable();
+    assert.equal(env.store.get('playbackSpeed:plex'), false);
+    assert.ok(env.menuItem('Playback Speed (plex): Disabled'));
+    const enable = env.menuItem('Playback Speed (plex): Disabled').fn;
+    enable();
+    enable();
+    assert.equal(env.store.get('playbackSpeed:plex'), true);
+    assert.ok(env.menuItem('Playback Speed (plex): Enabled'));
+});
+
+test('preferences changed elsewhere take effect on reload, not in the current application state', () => {
+    const env = loadUserscript({ hostname: 'app.plex.tv' });
+    env.tick();
+    const ids = env.menuCommandIds();
+    env.setStoredValue('playbackSpeed:plex', false);
+    env.setStoredValue('naturalVolume:plex', false);
+    env.setStoredValue('pictureInPicture:plex', false);
+    env.setStoredValue('plexSkipAutoPlayCountdown', false);
+    env.tick(3);
+    assert.ok(env.menuItem('Playback Speed (plex): Enabled'));
+    assert.ok(env.menuItem('Natural Volume (plex): Enabled'));
+    assert.ok(env.menuItem('Enable for PiP (plex): Enabled'));
+    assert.ok(env.menuItem('Skip Auto Play Countdown: Enabled'));
+    assert.equal(env.keydown('3').defaultPrevented, true);
+    assert.equal(env.slots.playbackSpeedControlNaturalVolumeControl, 'userscript');
+    assert.equal(typeof env.mediaSessionHandler(), 'function');
+    assert.deepEqual(env.menuCommandIds(), ids);
+    assert.deepEqual(env.alerts, []);
+    const reloaded = loadUserscript({ hostname: 'app.plex.tv', stored: Object.fromEntries(env.store) });
+    reloaded.tick();
+    assert.ok(reloaded.menuItem('Playback Speed (plex): Disabled'));
+    assert.ok(reloaded.menuItem('Natural Volume (plex): Disabled'));
+    assert.ok(reloaded.menuItem('Enable for PiP (plex): Disabled'));
+    assert.ok(reloaded.menuItem('Skip Auto Play Countdown: Disabled'));
+    assert.equal(reloaded.keydown('3').defaultPrevented, false);
+    assert.equal(reloaded.mediaSessionHandler(), undefined);
+});
+
+test('unrelated hostnames containing youtube.com do not inherit YouTube labels or defaults', () => {
+    for (const hostname of ['notyoutube.com', 'youtube.com.example.org']) {
+        const env = loadUserscript({ hostname });
+        env.tick();
+        assert.ok(env.menuItem(`Playback Speed (${hostname}): Disabled`), hostname);
+        assert.ok(env.menuItem(`Enable for PiP (${hostname}): Disabled`), hostname);
+        assert.equal(env.mediaSessionHandler(), undefined);
+        assert.equal(env.store.size, 0);
+    }
+});
+
+test('YouTube and its actual subdomains keep the existing settings scope', () => {
+    for (const hostname of ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com']) {
+        const env = loadUserscript({ hostname, stored: { 'playbackSpeed:youtube': false } });
+        env.tick();
+        assert.ok(env.menuItem('Playback Speed (youtube): Disabled'), hostname);
+        assert.ok(env.menuItem('Enable for PiP (youtube): Enabled'), hostname);
+        assert.equal(env.store.get('playbackSpeed:youtube'), false);
+    }
+});
+
+test('explicit changes use local settings even if persistence already contains the requested value', () => {
+    const env = loadUserscript({ hostname: 'app.plex.tv', stored: { 'pictureInPicture:plex': false } });
+    env.tick();
+    const enable = env.menuItem('Enable for PiP (plex): Disabled').fn;
+    env.setStoredValue('pictureInPicture:plex', true);
+    env.setStorageReadError(new Error('Unexpected read after startup'));
+    enable();
+    enable();
+    assert.equal(env.store.get('pictureInPicture:plex'), true);
+    assert.ok(env.menuItem('Enable for PiP (plex): Enabled'));
+    assert.equal(env.alerts.length, 1, 'only the first local change enables the feature');
+});
+
+test('startup applies saved overrides and legacy fallbacks without persisting defaults', () => {
+    for (const [stored, enabled] of [
+        [{ youtubeNaturalVolume: false, 'naturalVolume:youtube': true }, true],
+        [{ youtubeNaturalVolume: false }, false],
+        [{}, true],
+    ]) {
+        const env = loadUserscript({ hostname: 'www.youtube.com', stored });
+        env.tick();
+        assert.ok(env.menuItem(`Natural Volume (youtube): ${enabled ? 'Enabled' : 'Disabled'}`));
+        assert.deepEqual(Object.fromEntries(env.store), stored);
+        assert.deepEqual(env.alerts, []);
+    }
+});
+
+test('remote changes for other sites do not refresh or alter the current menu', () => {
+    const env = loadUserscript({ hostname: 'www.youtube.com' });
+    env.tick();
+    const labels = env.menuLabels();
+    const operations = env.menuOperations.length;
+    env.setStoredValue('playbackSpeed:plex', false);
+    env.setStoredValue('pictureInPicture:example.com', true);
+    env.tick();
+    assert.deepEqual(env.menuLabels(), labels);
+    assert.equal(env.menuOperations.length, operations);
+    assert.deepEqual(env.alerts, []);
+});
+
+test('returning to a cached page preserves its applied settings and menu entries', () => {
+    const env = loadUserscript({ hostname: 'app.plex.tv' });
+    env.tick();
+    const ids = env.menuCommandIds();
+    env.pageEvent('pagehide', { persisted: true });
+    env.setStoredValue('playbackSpeed:plex', false);
+    assert.ok(env.menuItem('Playback Speed (plex): Enabled'));
+    env.pageEvent('pageshow', { persisted: true });
+    assert.ok(env.menuItem('Playback Speed (plex): Enabled'));
+    const operations = env.menuOperations.length;
+    env.pageEvent('pageshow', { persisted: true });
+    assert.deepEqual(env.menuCommandIds(), ids);
+    assert.equal(env.menuOperations.length, operations);
+});
+
+test('preferences saved elsewhere do not activate an existing video-free frame', () => {
+    const env = loadUserscript({ hostname: 'example.com', withVideo: false });
+    env.tick();
+    assert.deepEqual(env.menuLabels(), []);
+    env.setStoredValue('playbackSpeed:example.com', false);
+    env.tick();
+    assert.deepEqual(env.menuLabels(), []);
+    const reloaded = loadUserscript({ hostname: 'example.com', withVideo: false, stored: Object.fromEntries(env.store) });
+    reloaded.tick();
+    assert.equal(reloaded.menuLabels().length, 3);
+    assert.ok(reloaded.menuItem('Playback Speed (example.com): Disabled'));
+});
+
+test('the PiP playback loop consumes applied settings without synchronizing persistence', async () => {
+    const env = loadUserscript({ hostname: 'app.plex.tv' });
+    const controls = env.addPlexControlBar();
+    env.tick();
+    await env.enterPictureInPicture();
+    env.setStoredValue('playbackSpeed:plex', false);
+    env.setStoredValue('pictureInPicture:plex', false);
+    env.setStorageReadError(new Error('Unexpected read after startup'));
+    assert.doesNotThrow(() => env.tickPip());
+    assert.equal(controls.children.length, 2);
+    assert.equal(env.pipDocument().querySelector('media-playback-rate-menu-button').disabled, false);
+    assert.equal(env.pipKeydown('3').defaultPrevented, true);
+    assert.notEqual(env.pipWindow(), null);
+    assert.equal(typeof env.mediaSessionHandler(), 'function');
+    assert.ok(env.menuItem('Enable for PiP (plex): Enabled'));
+    assert.equal(env.logs.some(entry => entry.join(' ').includes('Unexpected read after startup')), false);
+    assert.deepEqual(env.alerts, []);
+});
+
+test('managers without update-by-ID support do not accumulate old menu entries', () => {
+    const env = loadUserscript({ hostname: 'app.plex.tv', menuUpdatesById: false });
+    env.tick();
+    const volumeCommand = env.menuItem('Natural Volume (plex)');
+    for (let count = 0; count < 4; count++) {
+        env.toggleMenuItem('Playback Speed (plex)');
+        assert.equal(env.menuLabels().length, 4);
+        assert.equal(env.menuItem('Natural Volume (plex)'), volumeCommand);
+        assert.equal(env.menuLabels().filter(label => label.startsWith('Playback Speed (plex)')).length, 1);
+    }
+});
+
+test('a failed legacy-menu replacement cleanup retries its old ID without creating another entry', () => {
+    const env = loadUserscript({ hostname: 'app.plex.tv', menuUpdatesById: false });
+    env.tick();
+    const originalId = env.menuCommandIds()[0];
+    env.failMenuOperation('unregister');
+    assert.doesNotThrow(() => env.toggleMenuItem('Playback Speed (plex)'));
+    const replacementId = env.menuCommandIds().at(-1);
+    assert.notEqual(originalId, replacementId);
+    assert.ok(env.menuCommandIds().includes(originalId));
+    assert.ok(env.logs.some(entry => entry.join(' ').includes('Menu unregister failed')));
+    const registrations = env.menuOperations.filter(operation => operation.type === 'register').length;
+    env.tick();
+    assert.equal(env.menuCommandIds().includes(originalId), false);
+    assert.ok(env.menuCommandIds().includes(replacementId));
+    assert.equal(env.menuLabels().length, 4);
+    assert.equal(env.menuOperations.filter(operation => operation.type === 'register').length, registrations);
+});
+
+test('repeated registration failures are reported once while polling continues to retry', () => {
+    const env = loadUserscript({ hostname: 'example.com' });
+    for (let attempt = 0; attempt < 3; attempt++) {
+        env.failMenuOperation('register');
+        assert.doesNotThrow(() => env.tick());
+    }
+    assert.equal(env.logs.filter(entry => entry.join(' ').includes('Menu register failed')).length, 1);
+    env.tick();
+    assert.equal(env.menuLabels().length, 3);
+    env.failMenuOperation('register');
+    env.toggleMenuItem('Playback Speed (example.com)');
+    assert.equal(env.logs.filter(entry => entry.join(' ').includes('Menu register failed')).length, 2);
+    env.tick();
+    assert.ok(env.menuItem('Playback Speed (example.com): Enabled'));
+});
+
+test('application settings load and remain usable without a menu API', () => {
+    const env = loadUserscript({
+        hostname: 'example.com',
+        menuApi: false,
+        stored: { 'playbackSpeed:example.com': true, 'naturalVolume:example.com': true },
+    });
+    assert.equal(env.keydown('3').defaultPrevented, true);
+    assert.equal(env.video.playbackRate, 2);
+    env.tick();
+    assert.deepEqual(env.menuLabels(), []);
+    assert.equal(env.slots.playbackSpeedControlNaturalVolumeControl, 'userscript');
+    env.setStoredValue('playbackSpeed:example.com', false);
+    env.setStoredValue('naturalVolume:example.com', false);
+    env.setStorageReadError(new Error('Unexpected read after startup'));
+    env.tick();
+    assert.equal(env.keydown('4').defaultPrevented, true);
+    assert.equal(env.video.playbackRate, 3);
+    assert.equal(env.slots.playbackSpeedControlNaturalVolumeControl, 'userscript');
+    assert.deepEqual(env.menuOperations, []);
+});
+
+test('application consumers use applied settings without reading userscript storage', () => {
+    const env = loadUserscript({
+        hostname: 'app.plex.tv', withVideo: false,
+        stored: { 'playbackSpeed:plex': true },
+    });
+    env.tick();
+    env.setStorageReadError(new Error('Storage is temporarily unavailable'));
+    assert.doesNotThrow(() => env.keydown('3'));
+    assert.equal(env.keydown('3').defaultPrevented, false);
+    env.body.appendChild(env.video);
+    assert.equal(env.keydown('3').defaultPrevented, true);
+    assert.equal(env.video.playbackRate, 2);
+});
+
+test('an explicit setting change takes effect even when its menu update fails', async () => {
+    const env = loadUserscript({ hostname: 'app.plex.tv' });
+    const pageControls = env.addPlexControlBar();
+    env.tick();
+    await env.enterPictureInPicture();
+    env.failMenuOperation('register');
+    env.toggleMenuItem('Playback Speed (plex)');
+    assert.equal(env.pipDocument().querySelector('media-playback-rate-menu-button').disabled, true);
+    assert.equal(pageControls.children.length, 0);
+    assert.equal(env.pipKeydown('3').defaultPrevented, false);
+    assert.ok(env.menuItem('Playback Speed (plex): Enabled'), 'the failed projection still shows the old label');
+    env.tick();
+    assert.ok(env.menuItem('Playback Speed (plex): Disabled'));
+});
+
+test('menu reconciliation and explicit changes do not reread preferences after startup', () => {
+    const env = loadUserscript({
+        hostname: 'example.com',
+        stored: { 'playbackSpeed:example.com': true },
+    });
+    env.setStorageReadError(new Error('Storage read failed'));
+    env.tick(3);
+    assert.ok(env.menuItem('Playback Speed (example.com): Enabled'));
+    assert.equal(env.menuLabels().length, 3);
+    assert.equal(env.logs.filter(entry => entry.join(' ').includes('Storage read failed')).length, 0);
+    assert.equal(env.keydown('3').defaultPrevented, true);
+    assert.equal(env.video.playbackRate, 2);
+    env.setStoredValue('playbackSpeed:example.com', false);
+    env.tick();
+    assert.ok(env.menuItem('Playback Speed (example.com): Enabled'));
+    env.toggleMenuItem('Playback Speed (example.com)');
+    assert.ok(env.menuItem('Playback Speed (example.com): Disabled'));
+    assert.equal(env.keydown('4').defaultPrevented, false);
+});
+
+test('a video-free frame can use saved preferences without creating menu definitions as storage state', () => {
+    const env = loadUserscript({
+        hostname: 'app.plex.tv',
+        menuApi: false,
+        withVideo: false,
+        stored: { 'naturalVolume:plex': true },
+    });
+    env.tick();
+    assert.deepEqual(env.menuOperations, []);
+    assert.equal(env.slots.playbackSpeedControlNaturalVolumeControl, 'userscript');
+    assert.ok(activationMessages(env).includes('script activated (plex): saved settings exist for this site'));
+    env.setStoredValue('naturalVolume:plex', undefined);
+    env.tick();
+    assert.equal(env.slots.playbackSpeedControlNaturalVolumeControl, 'userscript');
+    assert.deepEqual(env.menuOperations, []);
 });

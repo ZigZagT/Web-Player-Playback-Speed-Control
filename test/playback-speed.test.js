@@ -266,10 +266,13 @@ test('plex speed buttons ignore clicks immediately after the feature is disabled
     const env = loadUserscript({ hostname: 'app.plex.tv' });
     const controlBar = env.addPlexControlBar();
     env.tick();
+    const speedUp = controlBar.querySelector('#playback-speed-btn-speedup');
+    const slowDown = controlBar.querySelector('#playback-speed-btn-slowdown');
 
     env.toggleMenuItem('Playback Speed (plex)');
-    controlBar.querySelector('#playback-speed-btn-speedup').click();
-    controlBar.querySelector('#playback-speed-btn-slowdown').click();
+    assert.equal(controlBar.children.length, 0);
+    speedUp.click();
+    slowDown.click();
     assert.equal(env.document.querySelector('#playback-speed-prompt'), null);
     env.tick();
     assert.equal(controlBar.children.length, 0);

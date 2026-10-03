@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Playback Speed Control
 // @namespace    https://github.com/ZigZagT
-// @version      3.0.2
+// @version      3.0.7
 // @downloadURL  https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @updateURL    https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @description  Add playback speed, natural volume, and Picture-in-Picture controls to web players
@@ -25,29 +25,6 @@
 // @license MIT
 // ==/UserScript==
 
-/*
-Media Chrome expand icon used by the Fit button:
-Copyright (c) 2020 Mux, Inc.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-*/
-
 (function() {
     'use strict';
     const console_log = (...args) => console.log('PlaybackSpeed:', ...args);
@@ -55,7 +32,7 @@ SOFTWARE.
     // ─── Site Detection ───
 
     const isPlex = /plex/i.test(window.location.hostname) || window.location.port === '32400';
-    const isYouTube = window.location.hostname.includes('youtube.com');
+    const isYouTube = window.location.hostname === 'youtube.com' || window.location.hostname.endsWith('.youtube.com');
 
     function getNormalizedOrigin() {
         if (isPlex) return 'plex';
@@ -72,23 +49,16 @@ SOFTWARE.
 
     // ─── Runtime Detection ───
 
-    const isUserscript = (
-        typeof GM_registerMenuCommand !== 'undefined' &&
-        typeof GM_unregisterMenuCommand !== 'undefined' &&
-        typeof GM_getValue !== 'undefined' &&
-        typeof GM_setValue !== 'undefined'
-    );
+    const isUserscript = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
 
-    // Userscript managers may expose a sandbox wrapper instead of the page's
-    // window. Use the page's own Media Session, Document Picture-in-Picture
-    // interface and media prototype so these changes affect the actual player.
+    // Userscript managers may expose a sandbox wrapper instead of the page's window.
+    // Use the page's own Media Session, Document Picture-in-Picture interface and media prototype so these changes affect the actual player.
     const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const mediaPrototype = (pageWindow.HTMLMediaElement || HTMLMediaElement).prototype;
 
     // ─── Multi-Instance Claiming ───
 
-    // Store shared state in the <html> element's dataset so the userscript
-    // sandbox and the page's JavaScript context can both inspect it.
+    // Store shared state in the <html> element's dataset so the userscript sandbox and the page's JavaScript context can both inspect it.
     const slots = document.documentElement.dataset;
     if (isUserscript) {
         if (slots.playbackSpeedControlUserscript) {
@@ -108,17 +78,49 @@ SOFTWARE.
         slots.playbackSpeedControl = 'active';
     }
 
-    // ─── Settings ───
+    // ─── Application Settings ───
 
-    function getSetting(key, defaultValue) {
-        if (!isUserscript) return defaultValue;
-        return GM_getValue(key, defaultValue);
+    // This object is the applied application state.
+    // Storage and menu metadata belong to their adapters, not to these settings or their consumers.
+    const settings = {
+        plexSkipAutoPlayCountdown: true,
+        playbackSpeed: isKnownSite,
+        naturalVolume: isKnownSite,
+        pictureInPicture: isKnownSite,
+    };
+
+    function applySettings(changes) {
+        const previous = { ...settings };
+        Object.assign(settings, changes);
+        if (settings.naturalVolume !== previous.naturalVolume) syncNaturalVolume();
+        if (settings.pictureInPicture !== previous.pictureInPicture) {
+            syncPictureInPicture();
+            syncAutoPictureInPicture();
+        }
+        if (settings.playbackSpeed !== previous.playbackSpeed) {
+            syncVideoSpeed();
+            syncPipSpeedControls();
+            if (isPlex) {
+                if (settings.playbackSpeed && shouldActivateScript({ requireVideo: true })) addPlaybackButtonControls();
+                else removePlaybackButtonControls();
+            }
+        }
     }
 
-    function setSetting(key, value) {
-        if (!isUserscript) return;
-        GM_setValue(key, value);
+    // Static-script mode is supported only on Plex.
+    if (!isUserscript && !isPlex) {
+        console_log('non-userscript mode only supports Plex, bailing');
+        return;
     }
+
+    // ─── Userscript Preference Storage ───
+
+    const settingStorageKeys = {
+        playbackSpeed: `playbackSpeed:${normalizedOrigin}`,
+        naturalVolume: `naturalVolume:${normalizedOrigin}`,
+        pictureInPicture: `pictureInPicture:${normalizedOrigin}`,
+    };
+    if (isPlex) settingStorageKeys.plexSkipAutoPlayCountdown = 'plexSkipAutoPlayCountdown';
 
     // Version 2.2 used different storage keys for each site's volume setting.
     // Read those keys as fallbacks so upgrading preserves saved opt-outs.
@@ -127,66 +129,80 @@ SOFTWARE.
         'naturalVolume:youtube': 'youtubeNaturalVolume',
     };
 
-    // Features are enabled by default on supported sites and are opt-in
-    // elsewhere unless a caller supplies a different default.
-    function getFeatureSetting(feature, defaultValue = isKnownSite) {
-        const key = `${feature}:${normalizedOrigin}`;
-        let fallback = defaultValue;
-        if (legacySettingKeys[key]) {
-            fallback = getSetting(legacySettingKeys[key], fallback);
+    function readStoredSettings() {
+        const values = {};
+        for (const [name, key] of Object.entries(settingStorageKeys)) {
+            const legacyKey = legacySettingKeys[key];
+            const legacyValue = legacyKey ? GM_getValue(legacyKey, undefined) : undefined;
+            const storedValue = GM_getValue(key, undefined);
+            if (storedValue !== undefined) values[name] = storedValue;
+            else if (legacyValue !== undefined) values[name] = legacyValue;
         }
-        return getSetting(key, fallback);
+        return values;
     }
 
-    // This setting chooses our PiP player. Chrome's separate site permission
-    // controls automatic opening; enabling our player does not grant permission.
-    // https://developer.chrome.com/blog/automatic-picture-in-picture-media-playback
-    let settings = {
-        plexSkipAutoPlayCountdown: getSetting('plexSkipAutoPlayCountdown', true),
-        playbackSpeed: getFeatureSetting('playbackSpeed'),
-        naturalVolume: getFeatureSetting('naturalVolume'),
-        pictureInPicture: getFeatureSetting('pictureInPicture', isUserscript && isKnownSite),
-    };
+    function saveStoredSetting(name, value) {
+        GM_setValue(settingStorageKeys[name], value);
+    }
 
-    // Static-script mode is supported only on Plex.
-    if (!isUserscript && !isPlex) {
-        console_log('non-userscript mode only supports Plex, bailing');
-        return;
+    // ─── Frame Activation ───
+
+    let hasSavedSitePreferences = false;
+    let lastActivationReason = null;
+
+    function shouldActivateScript({ requireVideo = false } = {}) {
+        const hasVideo = getVideo() !== null;
+        const active = hasVideo || hasSavedSitePreferences;
+        let reason = 'no video element or saved settings for this site';
+        if (hasVideo) reason = 'video element exists in this frame';
+        else if (hasSavedSitePreferences) reason = 'saved settings exist for this site';
+        if (reason !== lastActivationReason) {
+            console_log(`script ${active ? 'activated' : 'not activated'} (${normalizedOrigin}): ${reason}`);
+            lastActivationReason = reason;
+        }
+        return active && (!requireVideo || hasVideo);
     }
 
     // ─── Menu Commands (userscript only, scoped to current site) ───
 
     const menuToggles = [
-        { key: 'playbackSpeed', storageKey: `playbackSpeed:${normalizedOrigin}`,
-          labelOn: `Playback Speed (${normalizedOrigin}): Enabled \u2713`,
-          labelOff: `Playback Speed (${normalizedOrigin}): Disabled \u2717` },
-        { key: 'naturalVolume', storageKey: `naturalVolume:${normalizedOrigin}`,
-          labelOn: `Natural Volume (${normalizedOrigin}): Enabled \u2713`,
-          labelOff: `Natural Volume (${normalizedOrigin}): Disabled \u2717` },
-        { key: 'pictureInPicture', storageKey: `pictureInPicture:${normalizedOrigin}`,
-          labelOn: `Enable for PiP (${normalizedOrigin}): Enabled \u2713`,
-          labelOff: `Enable for PiP (${normalizedOrigin}): Disabled \u2717`,
-          warning: `Picture-in-Picture is enabled for ${pageWindow.location.origin}.\n\n`
-            + 'This script provides the floating player. Chrome decides when to open it automatically.\n\n'
-            + 'To allow automatic Picture-in-Picture:\n'
-            + '1. Open Chrome\'s site controls icon beside the address bar.\n'
-            + '2. Find "Automatic picture-in-picture". If it says "On (can ask)", turn it Off, then On.\n'
-            + '3. Verify "On (allowed)". If there is a dropdown instead, choose Allow.\n'
-            + '4. Play a video with sound and switch to another Chrome tab.\n\n'
-            + 'This permission applies only to this site address. Other Chrome requirements still apply.\n'
-            + 'The script does not change browser permissions or request camera or microphone access.' },
+        {
+            key: 'playbackSpeed',
+            labelOn: `Playback Speed (${normalizedOrigin}): Enabled \u2713`,
+            labelOff: `Playback Speed (${normalizedOrigin}): Disabled \u2717`,
+        },
+        {
+            key: 'naturalVolume',
+            labelOn: `Natural Volume (${normalizedOrigin}): Enabled \u2713`,
+            labelOff: `Natural Volume (${normalizedOrigin}): Disabled \u2717`,
+        },
+        {
+            key: 'pictureInPicture',
+            labelOn: `Enable for PiP (${normalizedOrigin}): Enabled \u2713`,
+            labelOff: `Enable for PiP (${normalizedOrigin}): Disabled \u2717`,
+            warning: `Picture-in-Picture is enabled for ${pageWindow.location.origin}.\n\n`
+                + 'This script provides the floating player. Chrome decides when to open it automatically.\n\n'
+                + 'To allow automatic Picture-in-Picture:\n'
+                + '1. Open Chrome\'s site controls icon beside the address bar.\n'
+                + '2. Find "Automatic picture-in-picture". If it says "On (can ask)", turn it Off, then On.\n'
+                + '3. Verify "On (allowed)". If there is a dropdown instead, choose Allow.\n'
+                + '4. Play a video with sound and switch to another Chrome tab.\n\n'
+                + 'This permission applies only to this site address. Other Chrome requirements still apply.\n'
+                + 'The script does not change browser permissions or request camera or microphone access.',
+        },
     ];
     if (isPlex) {
-        menuToggles.push(
-            { key: 'plexSkipAutoPlayCountdown', labelOn: 'Skip Auto Play Countdown: Enabled \u2713', labelOff: 'Skip Auto Play Countdown: Disabled \u2717' },
-        );
+        menuToggles.push({
+            key: 'plexSkipAutoPlayCountdown',
+            labelOn: 'Skip Auto Play Countdown: Enabled \u2713',
+            labelOff: 'Skip Auto Play Countdown: Disabled \u2717',
+        });
     }
 
     // Explain the possible effects when enabling a feature on an untested site.
     if (!isKnownSite) {
         const warnings = {
-            playbackSpeed: 'Playback Speed Control uses the number keys 1-9 and the , . < > keys on this site '
-                + 'and keeps the player at your selected speed. '
+            playbackSpeed: 'Playback Speed Control uses the number keys 1-9 and the , . < > keys on this site and keeps the player at your selected speed. '
                 + 'It has not been tested here and may override the site\'s own keyboard shortcuts or speed controls. '
                 + 'If you experience problems, disable this setting from the Userscript menu.',
             naturalVolume: 'Natural Volume changes how this site\'s volume slider controls loudness. '
@@ -195,8 +211,8 @@ SOFTWARE.
             pictureInPicture: 'Enable for PiP uses this script\'s player when Chrome requests Picture-in-Picture. '
                 + 'It moves the site\'s video element into a separate window and returns it when that window closes. '
                 + 'Chrome controls automatic entry through a separate permission. '
-                + 'It has not been tested here. Moving the video may disrupt the page layout or playback, '
-                + 'especially if the site replaces its player. '
+                + 'It has not been tested here. '
+                + 'Moving the video may disrupt the page layout or playback, especially if the site replaces its player. '
                 + 'If you experience problems, disable this setting from the Userscript menu.',
         };
         for (const toggle of menuToggles) {
@@ -204,74 +220,58 @@ SOFTWARE.
         }
     }
 
-    let lastActivationReason = null;
+    const registeredMenuCommands = new Map();
+    let lastMenuError = null;
 
-    // Keep the settings menu available when the site has saved preferences,
-    // even without a video. Playback controls still require a video to control.
-    function shouldActivateScript({ requireVideo = false } = {}) {
-        const hasVideo = getVideo() !== null;
-        let active = false;
-        let reason = 'no video element or saved settings for this site';
-        if (hasVideo) {
-            active = true;
-            reason = 'video element exists in this frame';
-        } else if (menuToggles.some(toggle => {
-            const key = toggle.storageKey || toggle.key;
-            const legacyKey = legacySettingKeys[key];
-            return getSetting(key, undefined) !== undefined ||
-                (legacyKey !== undefined && getSetting(legacyKey, undefined) !== undefined);
-        })) {
-            active = true;
-            reason = 'saved settings exist for this site';
-        }
-        if (reason !== lastActivationReason) {
-            console_log(`script ${active ? 'activated' : 'not activated'} (${normalizedOrigin}): ${reason}`);
-            lastActivationReason = reason;
-        }
-        return active && (!requireVideo || hasVideo);
-    }
-
-    let menuCommandsRegistered = false;
-    let menuLabelsChanged = false;
-
-    function registerMenuCommands() {
-        if (!isUserscript) return;
-
-        const shouldRegister = shouldActivateScript();
-        if (shouldRegister === menuCommandsRegistered && !menuLabelsChanged) {
-            return;
-        }
-
-        for (const toggle of menuToggles) {
-            if (toggle.cmdId !== undefined) {
-                GM_unregisterMenuCommand(toggle.cmdId);
-                delete toggle.cmdId;
+    function syncUserscriptMenu(visible, onSettingSelected) {
+        if (typeof GM_registerMenuCommand !== 'function' || typeof GM_unregisterMenuCommand !== 'function') return;
+        let operation;
+        try {
+            for (const toggle of menuToggles) {
+                const command = registeredMenuCommands.get(toggle.key);
+                if (command && command.replacedId !== undefined) {
+                    operation = `remove replaced menu entry ${toggle.key}`;
+                    GM_unregisterMenuCommand(command.replacedId);
+                    delete command.replacedId;
+                }
+                if (!visible) {
+                    if (command) {
+                        operation = `remove menu entry ${toggle.key}`;
+                        GM_unregisterMenuCommand(command.id);
+                        registeredMenuCommands.delete(toggle.key);
+                    }
+                    continue;
+                }
+                const enabled = Boolean(settings[toggle.key]);
+                const label = enabled ? toggle.labelOn : toggle.labelOff;
+                if (command && command.label === label) continue;
+                operation = `register menu entry ${toggle.key}`;
+                const id = GM_registerMenuCommand(label, () => {
+                    // A merged entry can invoke several callbacks.
+                    // Each one requests the action shown by this label, not a new toggle.
+                    // https://www.tampermonkey.net/documentation.php?locale=en&q=GM_registerMenuCommand
+                    const changed = onSettingSelected(toggle.key, !enabled);
+                    if (changed && !enabled && toggle.warning) alert(toggle.warning);
+                }, { id: command?.id });
+                // Record only successful operations.
+                // A later polling cycle retries failed entries without recreating successful ones.
+                const updatedCommand = { id, label };
+                registeredMenuCommands.set(toggle.key, updatedCommand);
+                // Managers without update-by-ID support can return a new ID.
+                // Keep the old ID until its removal succeeds, including retries.
+                if (command && command.id !== id) {
+                    updatedCommand.replacedId = command.id;
+                    operation = `remove replaced menu entry ${toggle.key}`;
+                    GM_unregisterMenuCommand(command.id);
+                    delete updatedCommand.replacedId;
+                }
             }
-            if (!shouldRegister) continue;
-            const label = settings[toggle.key] ? toggle.labelOn : toggle.labelOff;
-            toggle.cmdId = GM_registerMenuCommand(label, () => {
-                settings[toggle.key] = !settings[toggle.key];
-                menuLabelsChanged = true;
-                setSetting(toggle.storageKey || toggle.key, settings[toggle.key]);
-                if (toggle.key === 'pictureInPicture') {
-                    syncPictureInPicture();
-                    syncAutoPictureInPicture();
-                } else if (toggle.key === 'playbackSpeed') {
-                    syncPipSpeedControls();
-                }
-                registerMenuCommands();
-                if (toggle.warning && settings[toggle.key]) {
-                    alert(toggle.warning);
-                }
-                // Settings are read during each polling cycle and keyboard
-                // event, so changing them does not require a page reload.
-                // The old reload prompt was needed only for settings that
-                // enabled or disabled the entire script at startup.
-                console_log(`${toggle.key} is now ${settings[toggle.key] ? 'ENABLED' : 'DISABLED'}`);
-            });
+            lastMenuError = null;
+        } catch (error) {
+            const message = `could not ${operation}: ${error.name}: ${error.message}`;
+            if (message !== lastMenuError) console.error(`PlaybackSpeed: ${message}`);
+            lastMenuError = message;
         }
-        menuCommandsRegistered = shouldRegister;
-        menuLabelsChanged = false;
     }
 
     // ─── Instance Identity ───
@@ -288,9 +288,7 @@ SOFTWARE.
 
     // ─── Common: Playback Speed Control ───
 
-    const cycleSpeeds = [
-        0.5, 0.8, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 3, 5, 4, 5, 6, 7, 8, 9, 10, 15, 20
-    ];
+    const cycleSpeeds = [0.5, 0.8, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 3, 5, 4, 5, 6, 7, 8, 9, 10, 15, 20];
     const quickSetSpeeds = {
         1: 1,
         2: 1.5,
@@ -328,7 +326,7 @@ SOFTWARE.
             text-align: center;
             z-index: 99999;
             pointer-events: none;
-          `;
+        `;
         setTimeout(() => {
             prompt.remove();
         }, 2000);
@@ -425,9 +423,8 @@ SOFTWARE.
 
     // ─── Common: Natural Volume Control ───
 
-    // Web apps set HTMLMediaElement.volume linearly, but human hearing is
-    // logarithmic. Override the volume property with a decibel-linear curve so
-    // site sliders produce perceptually uniform loudness steps.
+    // Web apps set HTMLMediaElement.volume linearly, but human hearing is logarithmic.
+    // Override the volume property with a decibel-linear curve so site sliders produce perceptually uniform loudness steps.
     // Conversion functions from Discord's perceptual library (MIT):
     // https://github.com/discord/perceptual
     const VOLUME_DYNAMIC_RANGE_DB = 55;
@@ -465,11 +462,9 @@ SOFTWARE.
     }
 
     // YouTube applies loudness normalization by capping video.volume below 1.0.
-    // For videos inside a YouTube player, we read the normalization factor so
-    // our curve anchors at the endpoints: 0→0, normMax→normMax.
+    // For videos inside a YouTube player, we read the normalization factor so our curve anchors at the endpoints: 0→0, normMax→normMax.
     function getNormMaxYoutube(videoElem) {
-        const player = videoElem.closest('#movie_player') ||
-            (pipSession && pipSession.video === videoElem && pipSession.youtubePlayer);
+        const player = videoElem.closest('#movie_player') || (pipSession && pipSession.video === videoElem && pipSession.youtubePlayer);
         if (!player || !player.getPlayerResponse) return 1;
         const loudnessDb = player.getPlayerResponse()?.playerConfig?.audioConfig?.loudnessDb;
         if (loudnessDb == null || loudnessDb <= 0) return 1;
@@ -486,8 +481,7 @@ SOFTWARE.
             return;
         }
 
-        // Claim ownership before changing the descriptor so another instance
-        // cannot install a competing override if initialization fails.
+        // Claim ownership before changing the descriptor so another instance cannot install a competing override if initialization fails.
         slots.playbackSpeedControlNaturalVolumeControl = volumeLockValue;
 
         nativeVolumeDescriptor = Object.getOwnPropertyDescriptor(mediaPrototype, 'volume');
@@ -509,13 +503,11 @@ SOFTWARE.
             enumerable: true,
         });
 
-        // Mark the override active only after the descriptor is installed,
-        // so cleanup does not run against an incomplete installation.
+        // Mark the override active only after the descriptor is installed, so cleanup does not run against an incomplete installation.
         volumeOverrideActive = true;
         console_log('natural volume control applied');
 
-        // Read the site's original volume and write it through the override
-        // so the perceptual curve takes effect immediately.
+        // Read the site's original volume and write it through the override so the perceptual curve takes effect immediately.
         const videoElem = getVideo();
         if (videoElem) {
             const siteVolume = nativeVolumeDescriptor.get.call(videoElem);
@@ -531,9 +523,8 @@ SOFTWARE.
 
     function configurePipTemplates(pipWindow) {
         if (pipWindow.trustedTypes && !pipWindow.trustedTypes.defaultPolicy) {
-            // The PiP window inherits YouTube's Trusted Types requirements,
-            // which reject ordinary template strings. Use DOMPurify's documented
-            // default policy to sanitize them here without changing the opener's policy.
+            // The PiP window inherits YouTube's Trusted Types requirements, which reject ordinary template strings.
+            // Use DOMPurify's documented default policy to sanitize them here without changing the opener's policy.
             // https://github.com/cure53/DOMPurify#what-about-dompurify-and-trusted-types
             pipWindow.trustedTypes.createPolicy('default', {
                 createHTML: html => pipWindow.DOMPurify.sanitize(html, {
@@ -556,8 +547,8 @@ SOFTWARE.
             throw new Error('Cannot determine the available screen dimensions for Picture-in-Picture');
         }
         // Use the video's natural dimensions rather than the page's player size.
-        // Scale down to fit half the available screen width and height without
-        // enlarging smaller videos. Round down so neither limit is exceeded.
+        // Scale down to fit half the available screen width and height without enlarging smaller videos.
+        // Round down so neither limit is exceeded.
         // https://developer.mozilla.org/en-US/docs/Web/API/HTMLVideoElement/videoWidth
         const scale = Math.min(1, availWidth / (2 * videoWidth), availHeight / (2 * videoHeight));
         return {
@@ -567,8 +558,7 @@ SOFTWARE.
     }
 
     function resizePipToVideo(session) {
-        if (pipSession !== session || session.restored || session.window.closed ||
-            !session.controller.contains(session.video)) return;
+        if (pipSession !== session || session.restored || session.window.closed || !session.controller.contains(session.video)) return;
         const previousSize = session.requestedSize;
         const previousOuterSize = session.requestedOuterSize;
         const previousFrame = session.frameAllowance;
@@ -577,14 +567,13 @@ SOFTWARE.
             const screen = pipWindow.screen;
             const size = getPipContentSize(session.video, screen);
             let frame = session.frameAllowance;
-            // Recomputing the frame allowance after each Fit used Chrome's
-            // rounded measurements to calculate the next target. This made
-            // height requests alternate between 509 and 510 pixels.
+            // Recomputing the frame allowance after each Fit used Chrome's rounded measurements to calculate the next target.
+            // This made height requests alternate between 509 and 510 pixels.
             // Reuse the allowance until the display configuration changes.
-            if (!frame || frame.availWidth !== screen.availWidth || frame.availHeight !== screen.availHeight ||
-                frame.pixelRatio !== pipWindow.devicePixelRatio) {
+            if (!frame || frame.availWidth !== screen.availWidth || frame.availHeight !== screen.availHeight || frame.pixelRatio !== pipWindow.devicePixelRatio) {
                 frame = {
-                    availWidth: screen.availWidth, availHeight: screen.availHeight,
+                    availWidth: screen.availWidth,
+                    availHeight: screen.availHeight,
                     pixelRatio: pipWindow.devicePixelRatio,
                     width: pipWindow.outerWidth - pipWindow.innerWidth,
                     height: pipWindow.outerHeight - pipWindow.innerHeight,
@@ -595,8 +584,7 @@ SOFTWARE.
             session.requestedOuterSize = outerSize;
             session.frameAllowance = frame;
             // resizeTo expects the whole window's dimensions, including its frame.
-            // Call it from a new user action: opening the window consumes the
-            // earlier activation, and changing videos does not grant a new one.
+            // Call it from a new user action: opening the window consumes the earlier activation, and changing videos does not grant a new one.
             // https://developer.chrome.com/docs/web-platform/document-picture-in-picture/#resize-the-pip-window
             if (pipWindow.outerWidth !== outerSize.width || pipWindow.outerHeight !== outerSize.height) {
                 pipWindow.resizeTo(outerSize.width, outerSize.height);
@@ -611,51 +599,53 @@ SOFTWARE.
         logPipLayout(session, 'fit-video-requested');
     }
 
-    // Media Chrome controls the existing media element without replacing the
-    // site's source or playback engine. Its components provide the playback
-    // controls, while this script continues to handle its speed shortcuts.
+    // Media Chrome controls the existing media element without replacing the site's source or playback engine.
+    // Its components provide the playback controls, while this script continues to handle its speed shortcuts.
     // https://www.media-chrome.org/docs/en/get-started
     function createPipPlayer(pipWindow, onResize) {
         const pipDocument = pipWindow.document;
         const controller = pipDocument.createElement('media-controller');
-        // The site manages playback preferences. Do not replace them with
-        // Media Chrome's saved settings or automatically seek during live playback.
+        // The site manages playback preferences.
+        // Do not replace them with Media Chrome's saved settings or automatically seek during live playback.
         // https://www.media-chrome.org/docs/en/components/media-controller
         controller.setAttribute('novolumepref', '');
         controller.setAttribute('nomutedpref', '');
         controller.setAttribute('nosubtitleslangpref', '');
         controller.setAttribute('noautoseektolive', '');
         controller.setAttribute('hotkeys', 'no< no> nof nop');
-        // The script handles speed shortcuts. Document PiP does not support
-        // fullscreen or nested PiP, so omit those controls and shortcuts.
+        // The script handles speed shortcuts.
+        // Document PiP does not support fullscreen or nested PiP, so omit those controls and shortcuts.
         // https://wicg.github.io/document-picture-in-picture/#fullscreen
-        // Keep the timeline together so responsive styles can place it above
-        // compact controls or between volume and speed in a wider player.
+        // Keep the timeline together so responsive styles can place it above compact controls or between volume and speed in a wider player.
         // https://www.media-chrome.org/docs/en/position-controls
         const timeline = pipDocument.createElement('media-control-bar');
         timeline.className = 'pip-timeline';
-        timeline.append(
-            pipDocument.createElement('media-time-range'),
-            pipDocument.createElement('media-time-display'));
+        timeline.append(pipDocument.createElement('media-time-range'), pipDocument.createElement('media-time-display'));
         const bar = pipDocument.createElement('media-control-bar');
-        for (const tag of ['media-play-button', 'media-mute-button', 'media-volume-range',
-            'media-playback-rate-menu-button', 'media-captions-button']) {
+        for (const tag of ['media-play-button', 'media-mute-button', 'media-volume-range', 'media-playback-rate-menu-button', 'media-captions-button']) {
             bar.appendChild(pipDocument.createElement(tag));
         }
         bar.insertBefore(timeline, bar.querySelector('media-playback-rate-menu-button'));
         const resizeButton = pipDocument.createElement('media-chrome-button');
         resizeButton.setAttribute('aria-label', 'Resize window to current video');
-        // Use Media Chrome's expand icon without adding a fullscreen control.
+        // Diagonal resize arrows represent changing the window size, not fullscreen.
         // The generic button supplies its icon sizing and colors.
-        // https://github.com/muxinc/media-chrome/blob/v4.19.2/src/js/media-fullscreen-button.ts
+        // https://github.com/tabler/tabler-icons/blob/main/icons/outline/arrows-diagonal.svg
         const svgNamespace = 'http://www.w3.org/2000/svg';
         const resizeIcon = pipDocument.createElementNS(svgNamespace, 'svg');
-        resizeIcon.setAttribute('viewBox', '0 0 26 24');
+        resizeIcon.setAttribute('viewBox', '0 0 24 24');
         resizeIcon.setAttribute('aria-hidden', 'true');
         resizeIcon.setAttribute('focusable', 'false');
-        const resizePath = pipDocument.createElementNS(svgNamespace, 'path');
-        resizePath.setAttribute('d', 'M16 3v2.5h3.5V9H22V3h-6ZM4 9h2.5V5.5H10V3H4v6Zm15.5 9.5H16V21h6v-6h-2.5v3.5ZM6.5 15H4v6h6v-2.5H6.5V15Z');
-        resizeIcon.appendChild(resizePath);
+        resizeIcon.setAttribute('stroke', 'currentColor');
+        resizeIcon.setAttribute('stroke-width', '2');
+        resizeIcon.setAttribute('stroke-linecap', 'round');
+        resizeIcon.setAttribute('stroke-linejoin', 'round');
+        for (const path of ['M16 4l4 0l0 4', 'M14 10l6 -6', 'M8 20l-4 0l0 -4', 'M4 20l6 -6']) {
+            const resizePath = pipDocument.createElementNS(svgNamespace, 'path');
+            resizePath.setAttribute('d', path);
+            resizePath.setAttribute('fill', 'none');
+            resizeIcon.appendChild(resizePath);
+        }
         resizeButton.appendChild(resizeIcon);
         const resizeTooltip = pipDocument.createElement('span');
         resizeTooltip.setAttribute('slot', 'tooltip-content');
@@ -666,14 +656,13 @@ SOFTWARE.
         // https://github.com/muxinc/media-chrome/blob/v4.19.2/src/js/media-chrome-button.ts
         resizeButton.handleClick = onResize;
         bar.appendChild(resizeButton);
-        // The playback-rate menu allows direct selection of slower or faster
-        // speeds. The all-components bundle includes the menu components.
+        // The playback-rate menu allows direct selection of slower or faster speeds.
+        // The all-components bundle includes the menu components.
         // https://www.media-chrome.org/docs/en/components/media-playback-rate-menu
         const rates = pipDocument.createElement('media-playback-rate-menu');
         rates.hidden = true;
         rates.setAttribute('anchor', 'auto');
-        rates.setAttribute(
-            'rates', [...new Set([...cycleSpeeds, ...Object.values(quickSetSpeeds)])].sort((a, b) => a - b).join(' '));
+        rates.setAttribute('rates', [...new Set([...cycleSpeeds, ...Object.values(quickSetSpeeds)])].sort((a, b) => a - b).join(' '));
         // The top slot shares the control bars' built-in visibility lifecycle.
         // Updating the text must not add another hide timer or force controls on.
         // https://www.media-chrome.org/docs/en/components/media-controller
@@ -682,6 +671,37 @@ SOFTWARE.
         speedDisplay.setAttribute('aria-hidden', 'true');
         controller.append(speedDisplay, rates, bar);
         if (!controller.shadowRoot) throw new Error('Media Chrome could not initialize in the Picture-in-Picture document');
+
+        const layout = pipDocument.createElement('style');
+        // A full-height inline controller can leave space below its baseline and cause a scrollbar.
+        // Use block layout and prevent page overflow; the library still handles the controls and menu styles.
+        // https://chrome.dev/document-picture-in-picture-api/style.css
+        // The video's existing inline dimensions would override the library's full-size media slot.
+        // Override its size without rewriting its attributes.
+        // https://github.com/muxinc/media-chrome/blob/v4.19.2/src/js/media-container.ts
+        // The library's md breakpoint switches the same controls from a two-row grid to one flex row, without rebuilding or moving them.
+        // https://www.media-chrome.org/docs/en/styling
+        layout.textContent = `html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+            media-controller { display: block; width: 100%; height: 100%; --media-control-padding: 4px; }
+            media-controller > media-control-bar {
+                --media-control-bar-display: grid;
+                grid-template-columns: auto auto minmax(60px, 1fr) auto auto auto;
+            }
+            media-control-bar.pip-timeline {
+                --media-control-bar-display: inline-flex;
+                grid-column: 1 / -1;
+                grid-row: 1;
+                flex: 1;
+                min-width: 0;
+            }
+            media-volume-range { width: 60px; }
+            media-playback-rate-menu-button { margin-left: auto; }
+            media-text-display[slot="top-chrome"] { --media-control-padding: 4px 6px; --media-text-content-height: 20px; }
+            media-controller[breakpointmd] { --media-control-padding: 10px; }
+            media-controller[breakpointmd] > media-control-bar { --media-control-bar-display: inline-flex; }
+            media-controller[breakpointmd] media-volume-range { width: 100px; }
+            [${PIP_PLAYER_ATTRIBUTE}="${instanceId}"] { width: 100% !important; height: 100% !important; }`;
+        pipDocument.head.appendChild(layout);
         return controller;
     }
 
@@ -705,8 +725,7 @@ SOFTWARE.
     }
 
     function logPipLayoutGuide() {
-        console.groupCollapsed('PlaybackSpeed: %cPiPLayout log fields%c',
-            'font-weight: bold; font-size: 1.1em', '');
+        console.groupCollapsed('PlaybackSpeed: %cPiPLayout log fields%c', 'font-weight: bold; font-size: 1.1em', '');
         console.log('%cMeasurements%c - width x height in browser-reported pixels', 'font-weight: bold', '');
         console.log('Element positions are measured from the viewport\'s top-left corner.');
         console.table({
@@ -736,11 +755,9 @@ SOFTWARE.
 
     function printPipLayout(snapshot, timeOrigin) {
         const elapsed = timeOrigin === null ? null : Math.round(snapshot.time - timeOrigin);
-        const relativeTime = elapsed === null ? 'T unavailable (no setup-timer)'
-            : `T${elapsed >= 0 ? '+' : ''}${elapsed}ms`;
+        const relativeTime = elapsed === null ? 'T unavailable (no setup-timer)' : `T${elapsed >= 0 ? '+' : ''}${elapsed}ms`;
         console.group(`PlaybackSpeed: %cPiPLayout: ${snapshot.reason} | ${relativeTime} | ${snapshot.timestamp}`, 'font-weight: bold');
-        console.table(Object.fromEntries(Object.entries(snapshot.values).map(([field, value]) =>
-            [field, { Value: value }])), ['Value']);
+        console.table(Object.fromEntries(Object.entries(snapshot.values).map(([field, value]) => [field, { Value: value }])), ['Value']);
         console.groupEnd();
     }
 
@@ -753,20 +770,19 @@ SOFTWARE.
         const scroll = pipWindow.document.scrollingElement || root;
         const number = value => Number.isFinite(value) ? String(Math.round(value * 100) / 100) : 'unknown';
         const size = (width, height) => `${number(width)} x ${number(height)}`;
-        const difference = (total, available) => Number.isFinite(total) && Number.isFinite(available)
-            ? number(Math.max(0, total - available)) : 'unknown';
+        const difference = (total, available) => Number.isFinite(total) && Number.isFinite(available) ? number(Math.max(0, total - available)) : 'unknown';
         const box = session.video.getBoundingClientRect();
-        // Record geometry without changing the layout. Exclude media addresses,
-        // page titles and raw inline styles from these snapshots.
+        // Record geometry without changing the layout.
+        // Exclude media addresses, page titles and raw inline styles from these snapshots.
         const snapshot = {
-            reason, time, timestamp,
+            reason,
+            time,
+            timestamp,
             values: {
                 'Requested viewport size': size(session.requestedSize.width, session.requestedSize.height),
-                'Requested outer window size': session.requestedOuterSize
-                    ? size(session.requestedOuterSize.width, session.requestedOuterSize.height) : '-',
+                'Requested outer window size': session.requestedOuterSize ? size(session.requestedOuterSize.width, session.requestedOuterSize.height) : '-',
                 'Measured viewport size': size(pipWindow.innerWidth, pipWindow.innerHeight),
-                // Chrome can report requested bounds before the resize completes,
-                // so this value is not always the final native window size.
+                // Chrome can report requested bounds before the resize completes, so this value is not always the final native window size.
                 // https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/platform/widget/widget_base.cc
                 'Reported outer window size': size(pipWindow.outerWidth, pipWindow.outerHeight),
                 'Source video size': size(session.video.videoWidth, session.video.videoHeight),
@@ -778,8 +794,8 @@ SOFTWARE.
             },
         };
         if (session.layoutTimeOrigin === null) {
-            // Resize events can arrive before the setup timer runs. Keep their
-            // original measurements until that timer establishes the time origin.
+            // Resize events can arrive before the setup timer runs.
+            // Keep their original measurements until that timer establishes the time origin.
             if (reason !== 'setup-timer') {
                 session.pendingLayoutSnapshots.push(snapshot);
                 return;
@@ -791,7 +807,7 @@ SOFTWARE.
         printPipLayout(snapshot, session.layoutTimeOrigin);
     }
 
-    function loadPipControls(session) {
+    function loadPipDependencies(session) {
         const pipWindow = session.window;
         return new Promise((resolve, reject) => {
             let settled = false;
@@ -807,8 +823,7 @@ SOFTWARE.
             };
             const onError = event => finish(new Error(`Player library failed: ${event.message}`));
             const onReady = () => {
-                if (!pipWindow.DOMPurify || !['media-controller', 'media-chrome-button', 'media-text-display', 'media-playback-rate-menu',
-                    'media-playback-rate-menu-button'].every(tag => pipWindow.customElements.get(tag))) {
+                if (!pipWindow.DOMPurify || !['media-controller', 'media-chrome-button', 'media-text-display', 'media-playback-rate-menu', 'media-playback-rate-menu-button'].every(tag => pipWindow.customElements.get(tag))) {
                     finish(new Error('Player libraries did not initialize'));
                     return;
                 }
@@ -820,19 +835,17 @@ SOFTWARE.
             pipWindow.addEventListener('error', onError);
             try {
                 // The manager preloads these resources and verifies their hashes.
-                // GM_addElement supports injection under the page's Content
-                // Security Policy. Run the libraries in the PiP document so they
-                // use that window's event targets and viewport, not the opener's.
+                // GM_addElement supports injection under the page's Content Security Policy.
+                // Run the libraries in the PiP document so they use that window's event targets and viewport, not the opener's.
                 // https://www.tampermonkey.net/documentation.php#api:GM_addElement
                 // https://wicg.github.io/document-picture-in-picture/#is-document-picture-in-picture-window
-                // The all-components bundle parses templates as it loads,
-                // so the sanitizer policy must be installed first.
+                // The all-components bundle parses templates as it loads, so the sanitizer policy must be installed first.
                 // https://github.com/muxinc/media-chrome/blob/v4.19.2/src/js/media-theme-element.ts
                 const script = GM_addElement(pipWindow.document.head, 'script', {
-                    textContent: GM_getResourceText('DOMPurify') + '\n' +
-                        `(${configurePipTemplates.toString()})(window);\n` +
-                        GM_getResourceText('VideoPlayer') +
-                        '\nwindow.dispatchEvent(new Event("playback-speed-pip-ready"));',
+                    textContent: GM_getResourceText('DOMPurify') + '\n'
+                        + `(${configurePipTemplates.toString()})(window);\n`
+                        + GM_getResourceText('VideoPlayer')
+                        + '\nwindow.dispatchEvent(new Event("playback-speed-pip-ready"));',
                 });
                 if (!script) finish(new Error('The userscript manager could not load Picture-in-Picture controls'));
             } catch (error) {
@@ -847,9 +860,8 @@ SOFTWARE.
         return api.window;
     }
 
-    // Only use a PiP window opened by this script instance; leave the page's
-    // own PiP windows untouched. The instance ID is stored on the PiP document
-    // so ownership can be checked across script contexts.
+    // Only use a PiP window opened by this script instance; leave the page's own PiP windows untouched.
+    // The instance ID is stored on the PiP document so ownership can be checked across script contexts.
     function getOwnPipWindow() {
         const pipWindow = getPipWindow();
         if (!pipWindow) return null;
@@ -872,8 +884,7 @@ SOFTWARE.
         for (const pending of session.pendingLayoutSnapshots) printPipLayout(pending, session.layoutTimeOrigin);
         session.pendingLayoutSnapshots.length = 0;
         if (session.moved) {
-            // Detach the media before disconnecting Media Chrome: its normal
-            // disconnect cleanup toggles captions on an attached media element.
+            // Detach the media before disconnecting Media Chrome: its normal disconnect cleanup toggles captions on an attached media element.
             if (session.controller) {
                 session.controller.setAttribute('nodefaultstore', '');
                 session.controller.mediaStore = null;
@@ -918,8 +929,7 @@ SOFTWARE.
 
     function syncPictureInPicture() {
         const session = pipSession;
-        if (!settings.pictureInPicture || (session && session.moved &&
-            (!document.contains(session.parent) || session.video.ownerDocument !== session.window.document))) {
+        if (!settings.pictureInPicture || (session && session.moved && (!document.contains(session.parent) || session.video.ownerDocument !== session.window.document))) {
             restoreFromPip(session);
             if (session && session.window && !session.window.closed) {
                 session.window.close();
@@ -945,14 +955,12 @@ SOFTWARE.
     let pagePipHandler = null;
     let mediaSessionSetActionHandler = null;
 
-    // Media Session does not expose the current action handler. Record page
-    // registrations from document-start so disabling the feature can restore
-    // the latest observed handler. Forward other actions unchanged, but keep
-    // our dispatcher registered when the page calls this wrapped setter.
+    // Media Session does not expose the current action handler.
+    // Record page registrations from document-start so disabling the feature can restore the latest observed handler.
+    // Forward other actions unchanged, but keep our dispatcher registered when the page calls this wrapped setter.
     function observeMediaSessionHandlers() {
         const mediaSession = pageWindow.navigator && pageWindow.navigator.mediaSession;
-        if (!mediaSession || !isUserscript || !pageWindow.documentPictureInPicture ||
-            pageWindow.top !== pageWindow.self) return;
+        if (!mediaSession || !isUserscript || !pageWindow.documentPictureInPicture || pageWindow.top !== pageWindow.self) return;
         const original = mediaSession.setActionHandler;
         try {
             const wrapper = function(action, handler) {
@@ -992,13 +1000,19 @@ SOFTWARE.
             return Promise.resolve();
         }
         const session = {
-            video: videoElem, parent: videoElem.parentNode, nextSibling: videoElem.nextSibling,
+            video: videoElem,
+            parent: videoElem.parentNode,
+            nextSibling: videoElem.nextSibling,
             controls: videoElem.controls,
             mediaAttributes: ['slot', 'tabindex', PIP_PLAYER_ATTRIBUTE].map(name => [name, videoElem.getAttribute(name) ?? null]),
             youtubePlayer: videoElem.closest('#movie_player'),
-            listeners: new AbortController(), moved: false, restored: false,
-            layoutTimeOrigin: null, pendingLayoutSnapshots: [],
-            requestedOuterSize: null, frameAllowance: null,
+            listeners: new AbortController(),
+            moved: false,
+            restored: false,
+            layoutTimeOrigin: null,
+            pendingLayoutSnapshots: [],
+            requestedOuterSize: null,
+            frameAllowance: null,
         };
         pipSession = session;
         console_log(`entering picture-in-picture, reason: ${(details && details.enterPictureInPictureReason) || 'useraction'}`);
@@ -1006,15 +1020,14 @@ SOFTWARE.
         try {
             session.requestedSize = getPipContentSize(videoElem, pageWindow.screen);
             // Use Chrome's permission to open the window before asynchronous work.
-            // Document PiP cannot hide its title bar because Chrome must identify
-            // the controlling site. disallowReturnToOpener hides only the back
-            // button, so leave it available for returning to the original tab.
+            // Document PiP cannot hide its title bar because Chrome must identify the controlling site.
+            // disallowReturnToOpener hides only the back button, so leave it available for returning to the original tab.
             // https://wicg.github.io/document-picture-in-picture/#origin-visibility
             // https://developer.chrome.com/docs/web-platform/document-picture-in-picture/#hide-the-back-to-tab-button-in-pip-window
             request = api.requestWindow({
                 ...session.requestedSize,
-                // Use the current video and screen dimensions rather than a
-                // previously saved window size. Later resizing is user-controlled.
+                // Use the current video and screen dimensions rather than a previously saved window size.
+                // Later resizing is user-controlled.
                 // https://developer.chrome.com/docs/web-platform/document-picture-in-picture/#open-pip-to-default-position-and-size
                 preferInitialWindowPlacement: true,
             });
@@ -1028,13 +1041,12 @@ SOFTWARE.
                 if (!pipWindow.closed) pipWindow.close();
                 return;
             }
-            // Handle pagehide to return the original video before the closing
-            // window destroys its document.
+            // Handle pagehide to return the original video before the closing window destroys its document.
             // https://developer.chrome.com/docs/web-platform/document-picture-in-picture/#handle-when-the-pip-window-closes
             pipWindow.addEventListener('pagehide', () => {
                 restoreFromPip(session);
             }, { once: true });
-            await loadPipControls(session);
+            await loadPipDependencies(session);
             if (session.restored || !settings.pictureInPicture || pipWindow.closed) {
                 return;
             }
@@ -1043,38 +1055,6 @@ SOFTWARE.
             }
             pipWindow.document.documentElement.dataset.playbackSpeedControlPip = instanceId;
             session.controller = createPipPlayer(pipWindow, () => resizePipToVideo(session));
-            const layout = pipWindow.document.createElement('style');
-            // A full-height inline controller can leave space below its baseline
-            // and cause a scrollbar. Use block layout and prevent page overflow;
-            // the library still handles the controls and menu styles.
-            // https://chrome.dev/document-picture-in-picture-api/style.css
-            // The video's existing inline dimensions would override the library's
-            // full-size media slot. Override its size without rewriting its attributes.
-            // https://github.com/muxinc/media-chrome/blob/v4.19.2/src/js/media-container.ts
-            // The library's md breakpoint switches the same controls from a
-            // two-row grid to one flex row, without rebuilding or moving them.
-            // https://www.media-chrome.org/docs/en/styling
-            layout.textContent = `html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
-                media-controller { display: block; width: 100%; height: 100%; --media-control-padding: 4px; }
-                media-controller > media-control-bar {
-                    --media-control-bar-display: grid;
-                    grid-template-columns: auto auto minmax(60px, 1fr) auto auto auto;
-                }
-                media-control-bar.pip-timeline {
-                    --media-control-bar-display: inline-flex;
-                    grid-column: 1 / -1;
-                    grid-row: 1;
-                    flex: 1;
-                    min-width: 0;
-                }
-                media-volume-range { width: 60px; }
-                media-playback-rate-menu-button { margin-left: auto; }
-                media-text-display[slot="top-chrome"] { --media-control-padding: 4px 6px; --media-text-content-height: 20px; }
-                media-controller[breakpointmd] { --media-control-padding: 10px; }
-                media-controller[breakpointmd] > media-control-bar { --media-control-bar-display: inline-flex; }
-                media-controller[breakpointmd] media-volume-range { width: 100px; }
-                [${PIP_PLAYER_ATTRIBUTE}="${instanceId}"] { width: 100% !important; height: 100% !important; }`;
-            pipWindow.document.head.appendChild(layout);
             session.placeholder = document.createElement('span');
             session.placeholder.setAttribute(PIP_SLOT_ATTRIBUTE, instanceId);
             session.parent.insertBefore(session.placeholder, videoElem);
@@ -1083,18 +1063,16 @@ SOFTWARE.
             videoElem.controls = false;
             videoElem.setAttribute('slot', 'media');
             session.controller.prepend(videoElem);
-            // Media Chrome registers its request handler first. Read the actual
-            // playback rate after it handles the request so polling preserves
-            // the applied value. Leave event handling and display updates to the library.
+            // Media Chrome registers its request handler first.
+            // Read the actual playback rate after it handles the request so polling preserves the applied value.
+            // Leave event handling and display updates to the library.
             session.controller.addEventListener('mediaplaybackraterequest', () => {
-                if (pipSession === session && !session.restored && settings.playbackSpeed &&
-                    session.controller.contains(session.video)) {
+                if (pipSession === session && !session.restored && settings.playbackSpeed && session.controller.contains(session.video)) {
                     currentSpeed = session.video.playbackRate;
                     updatePipSpeedDisplay(session);
                 }
             }, { signal: session.listeners.signal });
-            session.video.addEventListener('ratechange', () => updatePipSpeedDisplay(session),
-                { signal: session.listeners.signal });
+            session.video.addEventListener('ratechange', () => updatePipSpeedDisplay(session), { signal: session.listeners.signal });
             syncPipSpeedControls();
             pipWindow.document.body.appendChild(session.controller);
             session.controlsObserver = new MutationObserver(() => {
@@ -1102,10 +1080,8 @@ SOFTWARE.
             });
             session.controlsObserver.observe(videoElem, { attributes: true, attributeFilter: ['controls'] });
             pipWindow.addEventListener('keydown', keyboardUpdateSpeed, { capture: true, signal: session.listeners.signal });
-            session.window.addEventListener('resize', () => logPipLayout(session, 'window-resize'),
-                { signal: session.listeners.signal });
-            session.video.addEventListener('loadedmetadata', () => logPipLayout(session, 'loadedmetadata'),
-                { signal: session.listeners.signal });
+            session.window.addEventListener('resize', () => logPipLayout(session, 'window-resize'), { signal: session.listeners.signal });
+            session.video.addEventListener('loadedmetadata', () => logPipLayout(session, 'loadedmetadata'), { signal: session.listeners.signal });
             session.window.setTimeout(() => logPipLayout(session, 'setup-timer'), 0);
             session.window.setTimeout(() => logPipLayout(session, 'one-second-timer'), 1000);
             session.timer = pipWindow.setInterval(syncPictureInPicture, 500);
@@ -1126,9 +1102,8 @@ SOFTWARE.
         console_log(`auto picture-in-picture: ${state}`);
     }
 
-    // A page action handler takes precedence over Chrome's BrowserInitiated
-    // video-only path. Registering it allows Chrome to request our player;
-    // it does not force Chrome to open a window.
+    // A page action handler takes precedence over Chrome's BrowserInitiated video-only path.
+    // Registering it allows Chrome to request our player; it does not force Chrome to open a window.
     // https://developer.chrome.com/blog/automatic-picture-in-picture-initiated-by-the-browser#implement-your-own-handler
     function syncAutoPictureInPicture() {
         const mediaSession = pageWindow.navigator && pageWindow.navigator.mediaSession;
@@ -1153,9 +1128,8 @@ SOFTWARE.
 
         if (shouldRegister) {
             try {
-                // The page can bypass our observer by calling a previously saved
-                // browser method. Since the current handler cannot be read, register
-                // ours again each cycle to recover if the page has replaced it.
+                // The page can bypass our observer by calling a previously saved browser method.
+                // Since the current handler cannot be read, register ours again each cycle to recover if the page has replaced it.
                 mediaSessionSetActionHandler.call(mediaSession, 'enterpictureinpicture', enterPictureInPicture);
             } catch (e) {
                 logAutoPipState(`registration refused by the browser: ${e.name}: ${e.message}`);
@@ -1230,8 +1204,7 @@ SOFTWARE.
         })
     }
 
-    // Remove this instance's buttons when speed control is disabled so inactive
-    // controls do not remain on the page.
+    // Remove this instance's buttons when speed control is disabled so inactive controls do not remain on the page.
     function removePlaybackButtonControls() {
         for (const btn of document.querySelectorAll(`[data-playback-speed-owner="${instanceId}"]`)) {
             btn.remove();
@@ -1252,10 +1225,10 @@ SOFTWARE.
         console_log('auto-clicking Play Next');
         lastAutoPlayedBtn = playNextBtn;
         // Plex listens for pointer and mouse events; calling click() alone is not enough.
-        playNextBtn.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
-        playNextBtn.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-        playNextBtn.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}));
-        playNextBtn.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+        playNextBtn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        playNextBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        playNextBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+        playNextBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
         playNextBtn.click();
     }
 
@@ -1278,18 +1251,35 @@ SOFTWARE.
         syncAutoPictureInPicture();
     }
 
+    // ─── Setting Changes ───
+
+    let pageActive = true;
+
+    function handleSettingChangeRequest(name, value) {
+        if (!isUserscript || !pageActive || settings[name] === value) return false;
+        try {
+            saveStoredSetting(name, value);
+        } catch (error) {
+            console.error(`PlaybackSpeed: could not save setting ${name}: ${error.name}: ${error.message}`);
+            return false;
+        }
+        hasSavedSitePreferences = true;
+        applySettings({ [name]: value });
+        syncUserscriptMenu(shouldActivateScript(), handleSettingChangeRequest);
+        console_log(`${name} is now ${value ? 'ENABLED' : 'DISABLED'}`);
+        return true;
+    }
+
     // ─── Main Loop ───
 
-    // AbortController lets the non-userscript instance remove its keyboard
-    // listener cleanly when a userscript instance takes over.
+    // AbortController lets the non-userscript instance remove its keyboard listener cleanly when a userscript instance takes over.
     const abortController = new AbortController();
 
     function scheduleLoopFrame() {
         setTimeout(() => {
             requestAnimationFrame(() => {
                 // Stop the static-script instance if a userscript takes over.
-                // Restore the prototype before releasing ownership so the
-                // userscript captures the native descriptor, not our override.
+                // Restore the prototype before releasing ownership so the userscript captures the native descriptor, not our override.
                 if (!isUserscript && slots.playbackSpeedControlUserscript) {
                     console_log('userscript instance detected, tearing down');
                     removeNaturalVolumeOverride();
@@ -1297,7 +1287,7 @@ SOFTWARE.
                     return;
                 }
 
-                registerMenuCommands();
+                if (isUserscript && pageActive) syncUserscriptMenu(shouldActivateScript(), handleSettingChangeRequest);
                 if (isPlex) {
                     plexLoopTick();
                 } else {
@@ -1310,17 +1300,30 @@ SOFTWARE.
 
     // ─── Registration ───
 
+    if (isUserscript) {
+        const stored = readStoredSettings();
+        Object.assign(settings, stored);
+        hasSavedSitePreferences = Object.keys(stored).length > 0;
+    } else {
+        // Static injection has no resource loader for the floating player.
+        settings.pictureInPicture = false;
+    }
     logPipLayoutGuide();
     console_log(`registering (${isUserscript ? 'as userscript' : 'static script'}, site: ${normalizedOrigin})`);
     // Capture phase so our handler intercepts events before other handlers
     // https://www.quirksmode.org/js/events_order.html#link4
-    // Registered unconditionally; keyboardUpdateSpeed checks the setting so
-    // toggling speed control from the menu takes effect without a reload.
+    // Registered unconditionally; keyboardUpdateSpeed checks the setting so toggling speed control from the menu takes effect without a reload.
     window.addEventListener("keydown", keyboardUpdateSpeed, { capture: true, signal: abortController.signal });
     pageWindow.addEventListener('pagehide', () => {
+        pageActive = false;
         const session = pipSession;
         restoreFromPip(session);
         if (session && session.window && !session.window.closed) session.window.close();
+    }, { signal: abortController.signal });
+    pageWindow.addEventListener('pageshow', event => {
+        if (!event.persisted) return;
+        pageActive = true;
+        if (isUserscript) syncUserscriptMenu(shouldActivateScript(), handleSettingChangeRequest);
     }, { signal: abortController.signal });
     observeMediaSessionHandlers();
     scheduleLoopFrame();

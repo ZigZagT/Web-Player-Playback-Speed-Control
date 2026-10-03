@@ -64,13 +64,15 @@ Design notes and references: [`designs/natural-volume-control.md`](designs/natur
 
 Open the player through Chrome's media controls, or let Chrome open it automatically when permitted. The floating window uses [Media Chrome](https://www.media-chrome.org/docs/en/get-started) for play/pause, seeking, mute, volume, playback time, and captions exposed by the video element. The original video element and stream are retained. The site's own controls, quality menus, and caption overlays stay in the tab.
 
+The captions button toggles caption or subtitle tracks exposed through the video's `textTracks`. It does not control subtitles rendered by the site's interface or burned into the video. Without such text tracks, the button has no effect.
+
 **Speed and volume:** the rate menu combines the script's cycle and quick-set values, from 0.5× to 20×. You can select any listed speed directly. Keyboard shortcuts and Natural Volume also work in the floating window, including YouTube's volume normalization. Disabling Playback Speed closes and disables the rate menu without affecting the other controls. A compact readout at the top-left shows the actual playback speed and updates when it changes. It shares Media Chrome's control-bar visibility and auto-hide behavior rather than using a separate notification timer. The original page retains its existing temporary overlay outside PiP.
 
 **Responsive controls:** below Media Chrome's standard medium breakpoint of 576 pixels, seeking and playback time occupy a separate row above the action buttons and volume slider. At 576 pixels and wider, all controls share one row, with the timeline between volume and speed selection. Narrow windows use tighter spacing and a shorter volume slider. The same control elements are retained as the window changes size; volume, seeking, speed selection and available captions remain accessible.
 
 **Window size:** when the window opens, the script starts with the video's natural dimensions. It reduces them proportionally to fit within half the available screen width and half its height, without enlarging smaller videos. For example, a 1920×1080 video on a 1920×1080 available screen requests a 960×540 window content area. Playing another video or changing resolution does not resize an open window.
 
-Click the **Fit video** expand icon in the control bar to apply the same sizing rule to the current video and screen—for example, after Plex advances to a queued video. Its tooltip and accessible label identify the action as **Resize window to current video**. You can also focus the button and press Enter or Space. Fit remains available when Playback Speed is disabled and resizes the window without cropping, stretching, or restarting the video. The script does not automatically adjust the window when you resize it manually.
+Click the **Fit video** resize icon (diagonal arrows) in the control bar to apply the same sizing rule to the current video and screen—for example, after Plex advances to a queued video. Its tooltip and accessible label identify the action as **Resize window to current video**. You can also focus the button and press Enter or Space. Fit remains available when Playback Speed is disabled and resizes the window without cropping, stretching, or restarting the video. The script does not automatically adjust the window when you resize it manually.
 
 Chrome can round or constrain the requested size. It also controls the title bar, which the script cannot hide: the [specification requires the controlling origin to remain identifiable](https://wicg.github.io/document-picture-in-picture/#origin-visibility). The [`disallowReturnToOpener` option](https://developer.chrome.com/docs/web-platform/document-picture-in-picture/#hide-the-back-to-tab-button-in-pip-window) hides only the back-to-tab button, so the script retains that useful navigation control.
 
@@ -104,11 +106,17 @@ References: [Chrome's Document Picture-in-Picture example](https://developer.chr
 
 The Userscript menu labels each feature with the site its setting applies to, such as `Playback Speed (plex)`, `Natural Volume (youtube)`, or `Natural Volume (example.com)`. All recognized Plex addresses share the `plex` settings scope, and all recognized YouTube addresses share `youtube`. Other sites use their normalized hostname and port, so settings for one address do not affect another.
 
+YouTube recognition is limited to `youtube.com` and its subdomains; an unrelated hostname that merely contains that text does not receive YouTube's defaults.
+
 The script activates when it has a video to control or saved settings for the current site. A video moved into the script's PiP window remains available to the original frame. Built-in defaults and settings saved for other sites do not count as saved settings for this frame.
 
 Activation decisions and their reasons are logged to the browser console when they change.
 
 Toggles take effect immediately, with no page reload. Settings persist across sessions.
+
+Saved settings are loaded once when the script starts. An explicit menu action updates the local application settings and saves the new value. Changes made in another tab or frame take effect after reloading; there are no settings listeners or polling. A menu callback always applies the action represented by its displayed entry, so repeating that callback cannot toggle the value back.
+
+Menu entries retain their IDs when the manager supports in-place updates. Only entries whose labels changed are updated. If a menu operation fails, the console reports it and a later polling cycle retries it without rebuilding entries that already succeeded. A failed preference write leaves the current setting unchanged.
 
 
 ## Sites
@@ -156,6 +164,8 @@ The script runs in two modes:
 
 ## Development
 
+Follow [STYLING_GUIDE.md](STYLING_GUIDE.md) for formatting, naming, and the separation between application settings, preference storage, and menu presentation.
+
 The installed userscript needs no build step or npm installation. Its manager supplies the two pinned libraries declared in the header. `package.json` is used only for testing. Run the tests inside the development container using Node's built-in test runner, with Node 18 or newer:
 
 ```bash
@@ -170,7 +180,7 @@ The Picture-in-Picture tests cover initial sizing, the quarter-screen limit, exp
 
 The userscript manager loads pinned copies of Media Chrome **4.19.2** and DOMPurify **3.4.16** into the PiP document and verifies their integrity hashes. Where Trusted Types is supported, the script installs a DOMPurify-backed default policy before Media Chrome runs, unless a default policy already exists. It leaves the opener's policy unchanged. Media Chrome handles the playback controls, their styling, and playback-rate requests. The userscript supplies the original media element, the available speed values, and the Fit button's action.
 
-The layout uses Media Chrome's [control-bar and top slots](https://www.media-chrome.org/docs/en/position-controls). Its [documented display, sizing properties and breakpoint attributes](https://www.media-chrome.org/docs/en/styling) switch the bottom controls between a compact two-row grid and a single flex row. The timeline remains a nested group within the same control bar, so resizing does not recreate controls or change their state. The Fit button uses Media Chrome's expand icon in its generic button; the icon's license notice is included in the userscript.
+The layout uses Media Chrome's [control-bar and top slots](https://www.media-chrome.org/docs/en/position-controls). Its [documented display, sizing properties and breakpoint attributes](https://www.media-chrome.org/docs/en/styling) switch the bottom controls between a compact two-row grid and a single flex row. The timeline remains a nested group within the same control bar, so resizing does not recreate controls or change their state. The Fit button uses [diagonal resize arrows](https://github.com/tabler/tabler-icons/blob/main/icons/outline/arrows-diagonal.svg) inside Media Chrome's generic button, rather than a fullscreen symbol. The icon is embedded in the userscript with its license notice; no additional library is loaded.
 
 The speed readout uses `media-text-display` in `top-chrome`. The script updates its text from the actual media rate, including keyboard, menu and native `ratechange` events. Media Chrome controls when it appears and hides; a rate change outside the floating player does not force hidden controls to appear. The script does not create another hide timer, send artificial pointer events or alter the controller's inactivity state.
 
@@ -189,6 +199,8 @@ Each heading includes a timestamp and elapsed milliseconds. The **`setup-timer`*
 Changes to handler registration and errors during window creation, library loading, or restoration are logged separately. Chrome's [Media panel](https://developer.chrome.com/docs/devtools/media-panel) reports automatic-entry conditions in `kAutoPictureInPictureInfoChanged` / `auto_picture_in_picture_info`. `reason: "BrowserInitiated"` identifies Chrome's native video-only mode. Automatic entry through the page handler uses `reason: "MediaPlayback"` with `enterPictureInPictureReason: "contentoccluded"`. The userscript does not infer these browser-controlled conditions.
 
 ## Maintenance constraints
+
+Keep `settings` as the sole applied application state. Load saved overrides once at startup and persist explicit local changes. Menus display the applied values; they do not load or own them. Application consumers must not depend on menu registration or read persistence directly. Do not add settings synchronization mechanisms. See [STYLING_GUIDE.md](STYLING_GUIDE.md) for the function contracts and formatting rules.
 
 Use Media Chrome's documented components and configuration for the player interface. Keep built-in control state and auto-hide behavior in the library, and supply application-specific content through its supported slots. Before changing sizing or styles, establish the cause of the problem from measurements taken in the affected player. The connected shared browser is for research, not testing; run repository tests separately.
 

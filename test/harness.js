@@ -282,6 +282,8 @@ function loadUserscript({
     mediaSessionAvailable = true,
     mediaSessionError = null,
     blockMediaSessionObserver = false,
+    menuUpdatesById = true,
+    menuApi = true,
     screen = { availWidth: 1920, availHeight: 1080 },
 } = {}) {
     // A fresh media class per load means the volume descriptor the script
@@ -408,6 +410,9 @@ function loadUserscript({
     }
 
     const store = new Map(Object.entries(stored));
+    let menuFailure = null;
+    let storageWriteError = null;
+    let storageReadError = null;
     const menuCommands = new Map();
     const menuOperations = [];
     const alerts = [];
@@ -416,6 +421,14 @@ function loadUserscript({
     const logs = [];
     const consoleCalls = [];
     let nextMenuId = 1;
+
+    function checkMenuFailure(type) {
+        if (!menuFailure || menuFailure.type !== type) return;
+        menuFailure.remaining--;
+        if (menuFailure.remaining !== 0) return;
+        menuFailure = null;
+        throw new Error(`Menu ${type} failed`);
+    }
 
     let timers = [];
     let nextTimerId = 1;
@@ -600,17 +613,26 @@ function loadUserscript({
             else ready();
             return script;
         };
-        globalThis.GM_getValue = (key, fallback) => (store.has(key) ? store.get(key) : fallback);
-        globalThis.GM_setValue = (key, value) => store.set(key, value);
-        globalThis.GM_registerMenuCommand = (label, fn) => {
-            const id = nextMenuId++;
-            menuOperations.push({ type: 'register', id, label });
+        globalThis.GM_getValue = (key, fallback) => {
+            if (storageReadError) throw storageReadError;
+            return store.has(key) ? store.get(key) : fallback;
+        };
+        globalThis.GM_setValue = (key, value) => {
+            if (storageWriteError) throw storageWriteError;
+            store.set(key, value);
+        };
+        globalThis.GM_registerMenuCommand = (label, fn, options = {}) => {
+            checkMenuFailure('register');
+            const updating = menuUpdatesById && menuCommands.has(options.id);
+            const id = updating ? options.id : nextMenuId++;
+            menuOperations.push({ type: updating ? 'update' : 'register', id, label });
             menuCommands.set(id, { label, fn });
             return id;
         };
         globalThis.GM_unregisterMenuCommand = (id) => {
+            checkMenuFailure('unregister');
             menuOperations.push({ type: 'unregister', id });
-            return menuCommands.delete(id);
+            menuCommands.delete(id);
         };
     } else {
         delete globalThis.GM_getValue;
@@ -621,6 +643,10 @@ function loadUserscript({
     if (!userscript || !libraryApi) {
         delete globalThis.GM_addElement;
         delete globalThis.GM_getResourceText;
+    }
+    if (!menuApi) {
+        delete globalThis.GM_registerMenuCommand;
+        delete globalThis.GM_unregisterMenuCommand;
     }
 
     (0, eval)(scriptSource);
@@ -649,6 +675,28 @@ function loadUserscript({
             pendingLibraries.shift()();
         },
         slots: documentElement.dataset,
+        setStoredValue(key, value) {
+            if (value === undefined) store.delete(key);
+            else store.set(key, value);
+        },
+        setStorageWriteError(error) {
+            storageWriteError = error;
+        },
+        setStorageReadError(error) {
+            storageReadError = error;
+        },
+        failMenuOperation(type, occurrence = 1) {
+            menuFailure = { type, remaining: occurrence };
+        },
+        menuCommandIds() {
+            return [...menuCommands.keys()];
+        },
+        pageEvent(type, event = {}) {
+            windowTarget.dispatch(type, event);
+        },
+        tickPip() {
+            for (const fn of [...intervals.values()]) fn();
+        },
         flushMutations() {
             for (const observer of mutationObservers) observer.callback();
         },
