@@ -64,7 +64,7 @@ Design notes and references: [`designs/natural-volume-control.md`](designs/natur
 
 Open the player through Chrome's media controls, or let Chrome open it automatically when permitted. The floating window uses [Media Chrome](https://www.media-chrome.org/docs/en/get-started) for play/pause, seeking, mute, volume, playback time, and captions exposed by the video element. The original video element and stream are retained. The site's own controls, quality menus, and caption overlays stay in the tab.
 
-The captions button toggles caption or subtitle tracks exposed through the video's `textTracks`. It does not control subtitles rendered by the site's interface or burned into the video. Without such text tracks, the button has no effect.
+The captions button toggles caption or subtitle tracks exposed through the video's `textTracks`. It does not control subtitles rendered by the site's interface or burned into the video. The button is hidden when no caption or subtitle tracks are available and appears when Media Chrome reports them. Turning captions off does not hide the button.
 
 **Speed and volume:** the rate menu combines the script's cycle and quick-set values, from 0.5× to 20×. You can select any listed speed directly. Keyboard shortcuts and Natural Volume also work in the floating window, including YouTube's volume normalization. Disabling Playback Speed closes and disables the rate menu without affecting the other controls. A compact readout at the top-left shows the actual playback speed and updates when it changes. It shares Media Chrome's control-bar visibility and auto-hide behavior rather than using a separate notification timer. The original page retains its existing temporary overlay outside PiP.
 

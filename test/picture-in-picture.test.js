@@ -208,11 +208,33 @@ test('the same controls use two compact rows and one wide row through library br
     assert.match(css, /media-controller\[breakpointmd\] > media-control-bar \{ --media-control-bar-display: inline-flex; \}/);
     assert.match(css, /media-controller\[breakpointmd\] media-volume-range \{ width: 100px; \}/);
     assert.match(css, /media-playback-rate-menu-button \{ margin-left: auto; \}/);
-    assert.doesNotMatch(css, /display:\s*none|opacity:|transition:|userinactive/);
+    const unavailableCaptionsRule = 'media-captions-button:not([mediasubtitleslist]) { display: none; }';
+    assert.ok(css.includes(unavailableCaptionsRule));
+    assert.doesNotMatch(css.replace(unavailableCaptionsRule, ''), /display:\s*none|opacity:|transition:|userinactive/);
     for (const bar of bars) {
         assert.equal(bar.getAttribute('slot'), undefined);
         assert.equal(bar.getAttribute('noautohide'), undefined);
         for (const control of bar.children) assert.equal(control.getAttribute('hidden'), undefined);
+    }
+});
+
+test('captions visibility follows the library track list, not whether captions are currently showing', async () => {
+    const env = loadWithPip();
+    env.tick();
+    await env.enterPictureInPicture();
+    const controller = env.pipDocument().querySelector('media-controller');
+    const captions = controller.querySelector('media-captions-button');
+    const css = env.pipDocument().head.querySelector('style').textContent;
+    assert.match(css, /media-captions-button:not\(\[mediasubtitleslist\]\) \{ display: none; \}/);
+    assert.doesNotMatch(css, /mediasubtitlesshowing/);
+    for (const tracks of [undefined, 'cc:en:English', 'sb:fr:French', undefined]) {
+        if (tracks === undefined) captions.removeAttribute('mediasubtitleslist');
+        else captions.setAttribute('mediasubtitleslist', tracks);
+        env.tick(3);
+        assert.equal(captions.getAttribute('mediasubtitleslist'), tracks);
+        assert.equal(captions.getAttribute('hidden'), undefined);
+        assert.notEqual(captions.disabled, true);
+        assert.equal(controller.querySelector('media-captions-button'), captions);
     }
 });
 

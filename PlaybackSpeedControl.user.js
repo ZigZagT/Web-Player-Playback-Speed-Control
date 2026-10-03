@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Playback Speed Control
 // @namespace    https://github.com/ZigZagT
-// @version      3.0.7
+// @version      3.0.8
 // @downloadURL  https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @updateURL    https://raw.githubusercontent.com/ZigZagT/Web-Player-Playback-Speed-Control/master/PlaybackSpeedControl.user.js
 // @description  Add playback speed, natural volume, and Picture-in-Picture controls to web players
@@ -681,6 +681,9 @@
         // https://github.com/muxinc/media-chrome/blob/v4.19.2/src/js/media-container.ts
         // The library's md breakpoint switches the same controls from a two-row grid to one flex row, without rebuilding or moving them.
         // https://www.media-chrome.org/docs/en/styling
+        // Media Chrome removes mediasubtitleslist when no caption or subtitle tracks are available.
+        // Use that library state instead of maintaining a separate track observer.
+        // https://www.media-chrome.org/docs/en/components/media-captions-button
         layout.textContent = `html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
             media-controller { display: block; width: 100%; height: 100%; --media-control-padding: 4px; }
             media-controller > media-control-bar {
@@ -696,6 +699,7 @@
             }
             media-volume-range { width: 60px; }
             media-playback-rate-menu-button { margin-left: auto; }
+            media-captions-button:not([mediasubtitleslist]) { display: none; }
             media-text-display[slot="top-chrome"] { --media-control-padding: 4px 6px; --media-text-content-height: 20px; }
             media-controller[breakpointmd] { --media-control-padding: 10px; }
             media-controller[breakpointmd] > media-control-bar { --media-control-bar-display: inline-flex; }
